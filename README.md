@@ -8,7 +8,7 @@ Production-ready AI-assisted clinical decision support for oncology teams. The s
 - FastAPI app with routers for health, evidence, and recommendation workflows
 - Services for EHR validation, PubMed retrieval, guideline search, risk analysis, recommendation generation, and citation formatting
 - Pydantic models for EHR, evidence, and recommendation payloads
-- Async PubMed integration with NCBI Entrez (esearch + efetch XML parsing) and in-memory query caching
+- Async PubMed + PMC Open Access integration (NCBI Entrez + PMC OAI/full-text parsing) with in-memory query caching
 
 ### Frontend (`frontend/`)
 - React + TypeScript + Tailwind CSS + React Router
@@ -36,8 +36,12 @@ Production-ready AI-assisted clinical decision support for oncology teams. The s
 `backend/.env.example`
 
 ```env
-ANTHROPIC_API_KEY=your_key_here
+LLM_BACKEND=ollama
+LLM_MODEL=mistral
+LLM_ENDPOINT=http://localhost:11434
 NCBI_EMAIL=your_email@example.com
+PMC_EMAIL=your_email@example.com
+PMC_BATCH_SIZE=5
 FASTAPI_ENV=development
 LOG_LEVEL=INFO
 ```

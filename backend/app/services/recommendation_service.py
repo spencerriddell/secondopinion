@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from app.models.ehr import PatientEHR
 from app.models.evidence import GuidelineReference, PubMedArticle
+from app.models.pmc import PMCArticle
 from app.models.recommendation import (
     Citation,
     Contraindication,
@@ -12,40 +13,39 @@ from app.models.recommendation import (
     Treatment,
 )
 from app.services.citation_service import CitationService
+from app.services.llm_service import LLMService
 from app.services.risk_analysis_service import RiskAnalysisService
 
-try:
-    from anthropic import Anthropic
-except Exception:  # pragma: no cover
-    Anthropic = None  # type: ignore[assignment]
-
-
 class RecommendationService:
-    def __init__(self, anthropic_api_key: str | None = None) -> None:
+    def __init__(self, llm_backend: str = "ollama", llm_model: str = "mistral", llm_endpoint: str | None = None) -> None:
         self.risk_service = RiskAnalysisService()
         self.citation_service = CitationService()
-        self.client = Anthropic(api_key=anthropic_api_key) if (Anthropic and anthropic_api_key) else None
+        self.llm_service = LLMService(backend=llm_backend, model=llm_model, endpoint=llm_endpoint)
 
     async def generate(
         self,
         patient: PatientEHR,
         articles: list[PubMedArticle],
         guidelines: list[GuidelineReference],
+        pmc_articles: list[PMCArticle] | None = None,
     ) -> list[Recommendation]:
-        if self.client:
-            return await self._generate_with_claude(patient, articles, guidelines)
+        pmc_articles = pmc_articles or []
+        if self.llm_service.is_available:
+            return await self._generate_with_native_llm(patient, articles, guidelines, pmc_articles)
         return self._fallback_recommendations(patient, articles, guidelines)
 
-    async def _generate_with_claude(
+    async def _generate_with_native_llm(
         self,
         patient: PatientEHR,
         articles: list[PubMedArticle],
         guidelines: list[GuidelineReference],
+        pmc_articles: list[PMCArticle],
     ) -> list[Recommendation]:
         prompt = {
             "patient": patient.model_dump(),
             "articles": [a.model_dump() for a in articles[:3]],
             "guidelines": [g.model_dump() for g in guidelines[:3]],
+            "pmc_articles": [a.model_dump() for a in pmc_articles[:3]],
             "schema": {
                 "recommendations": [
                     {
@@ -56,19 +56,20 @@ class RecommendationService:
                     }
                 ]
             },
+            "instructions": "Return strict JSON only and include recommendation fields matching schema.",
         }
-        message = self.client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0,
-            messages=[{"role": "user", "content": json.dumps(prompt)}],
-        )
-        text = message.content[0].text if message.content else ""
-        if text.strip().startswith("{"):
+
+        try:
+            text = await self.llm_service.generate(json.dumps(prompt), max_tokens=1000)
+        except Exception:
+            return self._fallback_recommendations(patient, articles, guidelines)
+
+        payload = self._extract_json_payload(text)
+        if payload:
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(payload)
             except json.JSONDecodeError as exc:
-                raise ValueError("Claude response parsing failed: invalid JSON payload") from exc
+                raise ValueError("Native LLM response parsing failed: invalid JSON payload") from exc
         else:
             parsed = {"recommendations": []}
         recommendations = parsed.get("recommendations", [])
@@ -86,6 +87,16 @@ class RecommendationService:
                 )
             )
         return result or self._fallback_recommendations(patient, articles, guidelines)
+
+    def _extract_json_payload(self, text: str) -> str | None:
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            return stripped
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end > start:
+            return stripped[start : end + 1]
+        return None
 
     def _fallback_recommendations(
         self,

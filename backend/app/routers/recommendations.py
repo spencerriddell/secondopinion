@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,7 +7,9 @@ from app.config import Settings, get_settings
 from app.models.ehr import PatientEHR
 from app.models.recommendation import Recommendation, RecommendationResponse
 from app.services.ehr_service import EHRService
+from app.services.evidence_service import EvidenceService
 from app.services.guideline_service import GuidelineService
+from app.services.pmc_service import PMCService
 from app.services.pubmed_service import PubMedService
 from app.services.recommendation_service import RecommendationService
 
@@ -15,20 +18,30 @@ _ehr_service = EHRService()
 _guideline_service = GuidelineService()
 _store: dict[str, Recommendation] = {}
 _patient_index: dict[str, list[str]] = {}
-
-
-def _pubmed(settings: Settings = Depends(get_settings)) -> PubMedService:
-    return PubMedService(email=settings.ncbi_email)
+logger = logging.getLogger("secondopinion.recommendations")
 
 
 def _recommendation_service(settings: Settings = Depends(get_settings)) -> RecommendationService:
-    return RecommendationService(anthropic_api_key=settings.anthropic_api_key)
+    return RecommendationService(
+        llm_backend=settings.llm_backend,
+        llm_model=settings.llm_model,
+        llm_endpoint=settings.llm_endpoint,
+    )
+
+
+def _evidence_service(settings: Settings = Depends(get_settings)) -> EvidenceService:
+    pubmed = PubMedService(email=settings.ncbi_email)
+    pmc = PMCService(
+        email=settings.pmc_email or settings.ncbi_email,
+        batch_size=settings.pmc_batch_size,
+    )
+    return EvidenceService(pubmed=pubmed, pmc=pmc)
 
 
 @router.post("/api/recommendations", response_model=RecommendationResponse)
 async def create_recommendations(
     payload: dict,
-    pubmed: PubMedService = Depends(_pubmed),
+    evidence_service: EvidenceService = Depends(_evidence_service),
     recommendation_service: RecommendationService = Depends(_recommendation_service),
 ) -> RecommendationResponse:
     try:
@@ -40,11 +53,15 @@ async def create_recommendations(
     patient.patient_id = patient_id
 
     try:
-        articles = await pubmed.search(f"{patient.cancer_type.value} {patient.stage.value}")
-    except Exception:
+        articles, pmc_articles = await evidence_service.search(
+            f"{patient.cancer_type.value} {patient.stage.value}"
+        )
+    except Exception as exc:
+        logger.warning("Evidence retrieval failed; falling back to empty evidence context: %s", exc)
         articles = []
+        pmc_articles = []
     guidelines = _guideline_service.search(cancer_type=patient.cancer_type.value)
-    recommendations = await recommendation_service.generate(patient, articles, guidelines)
+    recommendations = await recommendation_service.generate(patient, articles, guidelines, pmc_articles=pmc_articles)
 
     for recommendation in recommendations:
         _store[recommendation.recommendation_id] = recommendation
