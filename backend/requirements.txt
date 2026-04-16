@@ -1,0 +1,8 @@
+FastAPI
+Pydantic
+Anthropic SDK
+requests
+aiohttp
+python-dotenv
+pytest
+httpx
