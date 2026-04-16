@@ -10,6 +10,9 @@ from app.models.pmc import PMCArticle
 
 
 class PMCService:
+    # Keep extracted sections concise for prompt construction and payload size control.
+    SECTION_TEXT_LIMIT = 1500
+
     def __init__(self, email: str, batch_size: int = 5, ttl_seconds: int = 600) -> None:
         self.email = email
         self.batch_size = batch_size
@@ -68,7 +71,7 @@ class PMCService:
 
     async def fetch_full_text(self, pmc_id: str, session: aiohttp.ClientSession | None = None) -> str:
         normalized = pmc_id if pmc_id.startswith("PMC") else f"PMC{pmc_id}"
-        url = f"https://pmc.ncbi.nlm.nih.gov/articles/{normalized}/?page=1&format=xml"
+        url = f"https://pmc.ncbi.nlm.nih.gov/articles/{normalized}/?format=xml"
 
         if session:
             async with session.get(url, timeout=20) as response:
@@ -90,7 +93,7 @@ class PMCService:
             body = await response.text()
 
         parsed = feedparser.parse(body)
-        entry = parsed.entries[0] if parsed.entries else {}
+        entry = parsed.entries[0] if len(parsed.entries) > 0 else {}
         title = self._first(entry.get("title"))
         authors = entry.get("authors", [])
         if isinstance(authors, list):
@@ -125,7 +128,7 @@ class PMCService:
             if any(name in title for name in names):
                 text = " ".join(sec.xpath(".//*[local-name()='p']//text()")).strip()
                 if text:
-                    return text[:1500]
+                    return text[: self.SECTION_TEXT_LIMIT]
         return None
 
     def _relevance_score(self, query: str, full_text: str, metadata: dict) -> float:
@@ -145,7 +148,7 @@ class PMCService:
         lower = journal.lower()
         return 1.0 if any(name in lower for name in known_high_impact) else 0.5
 
-    def _first(self, value):
+    def _first(self, value: list[str] | str | None) -> str | None:
         if isinstance(value, list):
             return value[0] if value else None
         return value
@@ -154,8 +157,12 @@ class PMCService:
         if not published:
             return None
         try:
-            return datetime.fromisoformat(published.replace("Z", "+00:00")).year
+            return datetime.fromisoformat(published).year
         except ValueError:
+            try:
+                return datetime.fromisoformat(published.replace("Z", "+00:00")).year
+            except ValueError:
+                pass
             for token in published.split("-"):
                 if token.isdigit() and len(token) == 4:
                     return int(token)

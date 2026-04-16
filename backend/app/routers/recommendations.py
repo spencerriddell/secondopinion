@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,6 +18,7 @@ _ehr_service = EHRService()
 _guideline_service = GuidelineService()
 _store: dict[str, Recommendation] = {}
 _patient_index: dict[str, list[str]] = {}
+logger = logging.getLogger("secondopinion.recommendations")
 
 
 def _recommendation_service(settings: Settings = Depends(get_settings)) -> RecommendationService:
@@ -54,7 +56,8 @@ async def create_recommendations(
         articles, pmc_articles = await evidence_service.search(
             f"{patient.cancer_type.value} {patient.stage.value}"
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Evidence retrieval failed; falling back to empty evidence context: %s", exc)
         articles = []
         pmc_articles = []
     guidelines = _guideline_service.search(cancer_type=patient.cancer_type.value)

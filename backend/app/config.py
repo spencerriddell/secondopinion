@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     llm_backend: str = Field(default="ollama", alias="LLM_BACKEND")
     llm_model: str = Field(default="mistral", alias="LLM_MODEL")
-    llm_endpoint: str = Field(default="http://localhost:11434", alias="LLM_ENDPOINT")
+    llm_endpoint: str | None = Field(default=None, alias="LLM_ENDPOINT")
     ncbi_email: str = Field(alias="NCBI_EMAIL")
     pmc_email: str | None = Field(default=None, alias="PMC_EMAIL")
     pmc_batch_size: int = Field(default=5, alias="PMC_BATCH_SIZE")
