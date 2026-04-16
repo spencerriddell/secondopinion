@@ -64,7 +64,13 @@ class RecommendationService:
             messages=[{"role": "user", "content": json.dumps(prompt)}],
         )
         text = message.content[0].text if message.content else ""
-        parsed = json.loads(text) if text.strip().startswith("{") else {"recommendations": []}
+        if text.strip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Claude response parsing failed: invalid JSON payload") from exc
+        else:
+            parsed = {"recommendations": []}
         recommendations = parsed.get("recommendations", [])
 
         result: list[Recommendation] = []
