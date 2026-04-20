@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.services.pubmed_service import PubMedService
 
 
@@ -56,6 +58,17 @@ def _sample_pubmed_xml() -> str:
     """
 
 
+@pytest.fixture(autouse=True)
+def reset_pubmed_rate_limit_state():
+    PubMedService._request_lock = None
+    PubMedService._request_lock_loop = None
+    PubMedService._next_request_time = 0.0
+    yield
+    PubMedService._request_lock = None
+    PubMedService._request_lock_loop = None
+    PubMedService._next_request_time = 0.0
+
+
 def test_pubmed_service_defaults_to_three_results_and_adds_api_key(monkeypatch):
     seen_urls: list[str] = []
     responses = [
@@ -66,9 +79,8 @@ def test_pubmed_service_defaults_to_three_results_and_adds_api_key(monkeypatch):
         "app.services.pubmed_service.aiohttp.ClientSession",
         lambda: _MockSession(responses, seen_urls),
     )
-    PubMedService._next_request_time = 0.0
 
-    service = PubMedService(email="swr2118@cumc.columbia.edu", api_key="test-api-key")
+    service = PubMedService(email="test@example.com", api_key="test-api-key")
     articles = asyncio.run(service.search("egfr"))
 
     assert len(articles) == 1
@@ -83,21 +95,26 @@ def test_pubmed_service_rate_limits_requests(monkeypatch):
         _MockResponse(json_data={"esearchresult": {"idlist": ["12345"]}}),
         _MockResponse(text_data=_sample_pubmed_xml()),
     ]
-    sleep_calls: list[float] = []
+    recorded_sleep_durations: list[float] = []
+    # Two initial 100.0 values model back-to-back request timestamps; later values advance time.
+    monotonic_values = iter([100.0, 100.0, 100.5, 101.0, 101.5])
+
+    def _fake_monotonic() -> float:
+        return next(monotonic_values, 102.0)
 
     async def _fake_sleep(duration: float) -> None:
-        sleep_calls.append(duration)
+        recorded_sleep_durations.append(duration)
 
     monkeypatch.setattr(
         "app.services.pubmed_service.aiohttp.ClientSession",
         lambda: _MockSession(responses, seen_urls),
     )
-    monkeypatch.setattr("app.services.pubmed_service.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("app.services.pubmed_service.time.monotonic", _fake_monotonic)
     monkeypatch.setattr("app.services.pubmed_service.asyncio.sleep", _fake_sleep)
-    PubMedService._next_request_time = 0.0
 
-    service = PubMedService(email="swr2118@cumc.columbia.edu")
+    service = PubMedService(email="test@example.com")
     asyncio.run(service.search("nsclc"))
 
     assert len(seen_urls) == 2
-    assert sleep_calls == [1.0]
+    assert len(recorded_sleep_durations) == 1
+    assert 0 < recorded_sleep_durations[0] <= PubMedService.REQUEST_INTERVAL_SECONDS

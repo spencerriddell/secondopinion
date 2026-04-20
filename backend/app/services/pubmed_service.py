@@ -11,7 +11,9 @@ from app.models.evidence import PubMedArticle
 
 class PubMedService:
     REQUEST_INTERVAL_SECONDS = 1.0
-    _request_lock = threading.Lock()
+    _request_lock_init_guard = threading.Lock()
+    _request_lock: asyncio.Lock | None = None
+    _request_lock_loop: asyncio.AbstractEventLoop | None = None
     _next_request_time = 0.0
 
     def __init__(self, email: str, api_key: str | None = None, ttl_seconds: int = 600) -> None:
@@ -68,15 +70,27 @@ class PubMedService:
             return await response.text()
 
     async def _wait_for_rate_limit(self) -> None:
+        request_lock = self._get_request_lock()
         wait_seconds = 0.0
-        with self.__class__._request_lock:
+        async with request_lock:
             now = time.monotonic()
             scheduled_at = max(now, self.__class__._next_request_time)
-            self.__class__._next_request_time = scheduled_at + self.REQUEST_INTERVAL_SECONDS
+            self.__class__._next_request_time = (
+                scheduled_at + self.__class__.REQUEST_INTERVAL_SECONDS
+            )
             wait_seconds = scheduled_at - now
 
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
+
+    @classmethod
+    def _get_request_lock(cls) -> asyncio.Lock:
+        running_loop = asyncio.get_running_loop()
+        with cls._request_lock_init_guard:
+            if cls._request_lock is None or cls._request_lock_loop is not running_loop:
+                cls._request_lock = asyncio.Lock()
+                cls._request_lock_loop = running_loop
+        return cls._request_lock
 
     def _parse_xml(self, xml_text: str) -> list[PubMedArticle]:
         root = ET.fromstring(xml_text)
