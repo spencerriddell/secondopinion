@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="mistral", alias="LLM_MODEL")
     llm_endpoint: str | None = Field(default=None, alias="LLM_ENDPOINT")
     ncbi_email: str = Field(alias="NCBI_EMAIL")
+    pubmed_api_key: str | None = Field(default=None, alias="PUBMED_API_KEY")
     pmc_email: str | None = Field(default=None, alias="PMC_EMAIL")
     pmc_batch_size: int = Field(default=5, alias="PMC_BATCH_SIZE")
 
