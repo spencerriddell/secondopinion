@@ -30,7 +30,7 @@ def _recommendation_service(settings: Settings = Depends(get_settings)) -> Recom
 
 
 def _evidence_service(settings: Settings = Depends(get_settings)) -> EvidenceService:
-    pubmed = PubMedService(email=settings.ncbi_email)
+    pubmed = PubMedService(email=settings.ncbi_email, api_key=settings.pubmed_api_key)
     pmc = PMCService(
         email=settings.pmc_email or settings.ncbi_email,
         batch_size=settings.pmc_batch_size,

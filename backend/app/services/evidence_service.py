@@ -17,7 +17,7 @@ class EvidenceService:
         self.pmc = pmc
 
     async def search(
-        self, query: str, max_results: int = 5, date_from: str | None = None
+        self, query: str, max_results: int = 3, date_from: str | None = None
     ) -> tuple[list[PubMedArticle], list[PMCArticle]]:
         pmc_from = date_from or f"{date.today().year - self.DEFAULT_LOOKBACK_YEARS}-01-01"
         pubmed_task = self.pubmed.search(query=query, max_results=max_results)

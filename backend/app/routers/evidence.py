@@ -10,7 +10,7 @@ _guideline_service = GuidelineService()
 
 
 def _pubmed(settings: Settings = Depends(get_settings)) -> PubMedService:
-    return PubMedService(email=settings.ncbi_email)
+    return PubMedService(email=settings.ncbi_email, api_key=settings.pubmed_api_key)
 
 
 @router.get("/api/evidence/{pmid}", response_model=PubMedArticle)
@@ -24,7 +24,7 @@ async def get_evidence(pmid: str, pubmed: PubMedService = Depends(_pubmed)) -> P
 @router.get("/api/evidence/search", response_model=list[PubMedArticle])
 async def search_evidence(
     query: str = Query(min_length=2),
-    max_results: int = Query(default=5, ge=1, le=20),
+    max_results: int = Query(default=3, ge=1, le=20),
     pubmed: PubMedService = Depends(_pubmed),
 ) -> list[PubMedArticle]:
     return await pubmed.search(query=query, max_results=max_results)

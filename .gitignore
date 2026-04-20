@@ -24,3 +24,4 @@ frontend/dist/
 
 # Backend artifacts
 backend/.pytest_cache/
+backend/.venv/
