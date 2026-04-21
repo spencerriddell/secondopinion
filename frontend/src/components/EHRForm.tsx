@@ -70,10 +70,12 @@ export default function EHRForm({ onSubmit, loading }: Props) {
     await onSubmit({
       ...form,
       biomarkers: form.biomarkers
-        .filter((item) => item.name && item.value.trim())
+        .filter((item) => item.name.trim() && item.value.trim())
         .map((item) => ({
           ...item,
-          unit: item.name ? supportedBiomarkers[item.name] || item.unit : item.unit,
+          name: item.name.trim(),
+          value: item.value.trim(),
+          unit: item.name ? supportedBiomarkers[item.name.trim()] || item.unit : item.unit,
         })),
     });
   }
