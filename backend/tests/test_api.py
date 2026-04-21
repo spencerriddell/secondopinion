@@ -50,3 +50,11 @@ def test_get_supported_biomarkers():
     data = response.json()
     assert "EGFR" in data
     assert data["PD-L1"] == "%"
+
+
+def test_get_supported_genetics():
+    response = client.get("/api/genetics/NSCLC")
+    assert response.status_code == 200
+    data = response.json()
+    assert "EGFR" in data
+    assert "ALK" in data
