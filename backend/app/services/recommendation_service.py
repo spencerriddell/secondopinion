@@ -195,10 +195,14 @@ class RecommendationService:
         indication_text: str,
         articles: list[PubMedArticle],
     ) -> list[Recommendation]:
-        risk, ci, factors = self.risk_service.score(patient, treatment_name)
+        risk, ci, factors = self.risk_service.score(
+            patient, treatment_name, drug_class=drug_class, articles=articles
+        )
         contraindications = [
             Contraindication(**item)
-            for item in self.risk_service.identify_contraindications(patient, treatment_name)
+            for item in self.risk_service.identify_contraindications(
+                patient, treatment_name, drug_class=drug_class
+            )
         ]
 
         citation_models: list[Citation] = []
@@ -236,7 +240,10 @@ class RecommendationService:
             efficacy_evidence=efficacy,
             citations=citation_models,
             explanation=(
-                "Recommendation generated from patient-specific EHR factors, guideline context, and literature evidence."
+                f"Risk score {risk} derived from: patient factors (age, ECOG, stage, comorbidities), "
+                f"{drug_class or 'systemic'} treatment-class toxicity profile, landmark trial AE data, "
+                f"patient-treatment interactions, and {len(articles)} retrieved PubMed source(s). "
+                f"CI {ci[0]}–{ci[1]} reflects evidence density for this therapy."
             ),
         )
         return [recommendation]
