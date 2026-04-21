@@ -15,22 +15,27 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <div className="min-h-screen bg-slate-100 text-slate-900">
-          <header className="bg-white border-b p-4 flex items-center justify-between">
-            <Link to="/" className="font-bold">Second Opinion</Link>
-            <nav className="flex gap-3 text-sm">
-              <Link to="/">Dashboard</Link>
-              <Link to="/intake">Patient Intake</Link>
-              <Link to="/results">Results</Link>
-            </nav>
+        <div className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-slate-100 text-slate-900">
+          <header className="sticky top-0 z-10 border-b border-sky-100 bg-white/90 backdrop-blur">
+            <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
+              <Link to="/" className="text-lg font-semibold text-sky-900">Second Opinion CDS</Link>
+              <nav className="flex gap-4 text-sm font-medium text-slate-600">
+                <Link className="transition hover:text-sky-700" to="/">Dashboard</Link>
+                <Link className="transition hover:text-sky-700" to="/intake">Patient Intake</Link>
+                <Link className="transition hover:text-sky-700" to="/results">Results</Link>
+              </nav>
+            </div>
           </header>
-          <main className="max-w-5xl mx-auto p-4">
+          <main className="mx-auto max-w-6xl p-4 sm:p-6">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/intake" element={<PatientIntake setResult={setResult} />} />
               <Route path="/results" element={<RecommendationResults result={result} />} />
             </Routes>
           </main>
+          <footer className="border-t border-sky-100 bg-white/80 p-3 text-center text-xs text-slate-500">
+            Clinical decision support prototype for oncology treatment planning
+          </footer>
         </div>
       </BrowserRouter>
     </QueryClientProvider>

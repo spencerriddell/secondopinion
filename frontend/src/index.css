@@ -2,9 +2,11 @@
 
 :root {
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 body {
   margin: 0;
+  background: #f8fafc;
+  color: #0f172a;
 }
