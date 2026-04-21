@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.models.ehr import PatientEHR
@@ -16,10 +18,26 @@ from app.services.citation_service import CitationService
 from app.services.llm_service import LLMService
 from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService, RiskArticleFilter
 
-RiskOverride = tuple[float, tuple[float, float], list[str], list[str], str, str, float]
+
+@dataclass
+class RiskOverride:
+    risk_score: float
+    risk_confidence_interval: tuple[float, float]
+    risk_factors: list[str]
+    risk_mitigation_strategies: list[str]
+    risk_confidence_grade: str
+    comparative_risk_narrative: str
+    evidence_quality_score: float
 
 class RecommendationService:
     _target_recommendation_count = 5
+    _MAX_RISK_ARTICLES = 8
+    _MAX_LLM_FACTOR_INPUT = 10
+    _MAX_LLM_FACTOR_OUTPUT = 8
+    _RISK_COMPARISON_THRESHOLD = 0.8
+    _COMPARATIVE_INSTRUCTION = (
+        "State whether this treatment appears lower/equal/higher risk versus alternatives."
+    )
 
     def __init__(self, llm_backend: str = "ollama", llm_model: str = "mistral", llm_endpoint: str | None = None) -> None:
         self.risk_service = RiskAnalysisService()
@@ -81,17 +99,16 @@ class RecommendationService:
         recommendations = parsed.get("recommendations", [])
         candidate_treatments = [
             r.get("treatment_name", "Guideline-directed therapy")
-            for r in recommendations
+            for r in recommendations[: self._target_recommendation_count]
             if isinstance(r, dict)
         ]
         comparative_base_scores = [
             self.risk_service.score(patient, name, articles=articles)[0]
             for name in candidate_treatments
         ]
-        comparative_mean_risk = (
-            round(sum(comparative_base_scores) / len(comparative_base_scores), 1)
-            if comparative_base_scores else None
-        )
+        comparative_mean_risk = None
+        if len(comparative_base_scores) > 0:
+            comparative_mean_risk = round(sum(comparative_base_scores) / len(comparative_base_scores), 1)
 
         result: list[Recommendation] = []
         for rec in recommendations:
@@ -144,7 +161,9 @@ class RecommendationService:
         if not self.llm_service.is_available:
             return None
 
-        ranked_articles = self.risk_article_filter.rank_articles(patient, treatment_name, articles)[:8]
+        ranked_articles = self.risk_article_filter.rank_articles(
+            patient, treatment_name, articles
+        )[: self._MAX_RISK_ARTICLES]
         parsed_pmc_ae = self.pmc_ae_parser.parse_many(pmc_articles)[:3]
         prompt = {
             "task": "Estimate treatment-specific clinical risk from source evidence",
@@ -166,7 +185,7 @@ class RecommendationService:
             "pmc_adverse_event_tables": parsed_pmc_ae,
             "comparative_context": {
                 "mean_risk_score_of_alternatives": comparative_mean_risk,
-                "instruction": "State whether this treatment appears lower/equal/higher risk versus alternatives."
+                "instruction": self._COMPARATIVE_INSTRUCTION,
             },
             "schema": {
                 "risk_score": "float 1.0-10.0",
@@ -226,15 +245,17 @@ class RecommendationService:
         high = round(max(1.0, min(10.0, float(risk_ci[1]))), 1)
         if low > high:
             low, high = high, low
-        ranked_factors = self.risk_service._rank_risk_factors(patient, risk_factors[:10])
-        return (
-            bounded_score,
-            (low, high),
-            ranked_factors[:8],
-            (mitigation_strategies or [])[:5],
-            (confidence_grade or "moderate").lower(),
-            comparative_narrative or "",
-            round(max(1.0, min(10.0, float(evidence_quality or 5.0))), 1),
+        ranked_factors = self.risk_service.rank_risk_factors(
+            patient, risk_factors[: self._MAX_LLM_FACTOR_INPUT]
+        )
+        return RiskOverride(
+            risk_score=bounded_score,
+            risk_confidence_interval=(low, high),
+            risk_factors=ranked_factors[: self._MAX_LLM_FACTOR_OUTPUT],
+            risk_mitigation_strategies=(mitigation_strategies or [])[:5],
+            risk_confidence_grade=(confidence_grade or "moderate").lower(),
+            comparative_risk_narrative=comparative_narrative or "",
+            evidence_quality_score=round(max(1.0, min(10.0, float(evidence_quality or 5.0))), 1),
         )
 
     def _fallback_recommendations(
@@ -336,7 +357,13 @@ class RecommendationService:
             comparative_mean_risk=comparative_mean_risk,
         )
         if llm_risk:
-            risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score = llm_risk
+            risk = llm_risk.risk_score
+            ci = llm_risk.risk_confidence_interval
+            factors = llm_risk.risk_factors
+            mitigation = llm_risk.risk_mitigation_strategies
+            confidence_grade = llm_risk.risk_confidence_grade
+            comparative_narrative = llm_risk.comparative_risk_narrative
+            evidence_quality_score = llm_risk.evidence_quality_score
             factors = [*factors, "Risk synthesized by LLM from provided literature and guideline context."]
         else:
             risk, ci, factors = base_risk, base_ci, base_factors
@@ -352,7 +379,15 @@ class RecommendationService:
             drug_class=drug_class,
             indication_text=indication_text,
             articles=articles,
-            risk_override=(risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score),
+            risk_override=RiskOverride(
+                risk_score=risk,
+                risk_confidence_interval=ci,
+                risk_factors=factors,
+                risk_mitigation_strategies=mitigation,
+                risk_confidence_grade=confidence_grade,
+                comparative_risk_narrative=comparative_narrative,
+                evidence_quality_score=evidence_quality_score,
+            ),
         )
 
     def _build_default_mitigation(self, factors: list[str]) -> list[str]:
@@ -371,9 +406,9 @@ class RecommendationService:
     def _build_comparative_narrative(self, risk: float, comparative_mean_risk: float | None) -> str:
         if comparative_mean_risk is None:
             return ""
-        if risk >= comparative_mean_risk + 0.8:
+        if risk >= comparative_mean_risk + self._RISK_COMPARISON_THRESHOLD:
             return f"Higher toxicity burden than cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
-        if risk <= comparative_mean_risk - 0.8:
+        if risk <= comparative_mean_risk - self._RISK_COMPARISON_THRESHOLD:
             return f"Lower toxicity burden than cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
         return f"Comparable toxicity burden to cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
 
@@ -385,7 +420,8 @@ class RecommendationService:
         score = 4.0
         if articles:
             score += min(3.0, 0.6 * len(articles[:5]))
-        if any(a.year and a.year >= 2021 for a in articles):
+        recent_threshold = datetime.now(UTC).year - 5
+        if any(a.year and a.year >= recent_threshold for a in articles):
             score += 1.0
         if guidelines:
             score += 1.0
@@ -402,16 +438,22 @@ class RecommendationService:
         risk_override: RiskOverride | None = None,
     ) -> list[Recommendation]:
         if risk_override is not None:
-            risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score = risk_override
+            risk = risk_override.risk_score
+            ci = risk_override.risk_confidence_interval
+            factors = risk_override.risk_factors
+            mitigation = risk_override.risk_mitigation_strategies
+            confidence_grade = risk_override.risk_confidence_grade
+            comparative_narrative = risk_override.comparative_risk_narrative
+            evidence_quality_score = risk_override.evidence_quality_score
         else:
             risk, ci, factors = self.risk_service.score(
                 patient, treatment_name, drug_class=drug_class, articles=articles
             )
+            factors = self.risk_service.rank_risk_factors(patient, factors)
             mitigation = self._build_default_mitigation(factors)
             confidence_grade = "moderate"
             comparative_narrative = ""
             evidence_quality_score = self._estimate_evidence_quality_score(articles, [])
-        factors = self.risk_service._rank_risk_factors(patient, factors)
         contraindications = [
             Contraindication(**item)
             for item in self.risk_service.identify_contraindications(

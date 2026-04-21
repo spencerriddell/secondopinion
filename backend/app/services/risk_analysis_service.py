@@ -20,7 +20,7 @@ _AE_KEYWORDS = re.compile(
 )
 
 _SEVERITY_KEYWORDS = re.compile(
-    r"\b(grade\s*[3-5]|severe|fatal|life.threatening|hospitali[sz]|discontinu)\b",
+    r"\b(grade\s*[3-5]|severe|fatal|life[-\s]?threatening|hospitali[sz]|discontinu)\b",
     re.IGNORECASE,
 )
 
@@ -275,7 +275,7 @@ def organ_function_poor_any(patient: PatientEHR) -> bool:
 class RiskAnalysisService:
     _SEVERITY_RANK_PATTERNS: list[tuple[int, re.Pattern[str]]] = [
         (4, re.compile(r"\b(grade\s*5|fatal|death|mortality)\b", re.IGNORECASE)),
-        (3, re.compile(r"\b(grade\s*[3-4]|severe|life.threatening|hospitali[sz])\b", re.IGNORECASE)),
+        (3, _SEVERITY_KEYWORDS),
         (2, re.compile(r"\b(grade\s*[1-2]|mild|moderate)\b", re.IGNORECASE)),
     ]
 
@@ -305,8 +305,12 @@ class RiskAnalysisService:
             return 1
 
         scored = [(_severity_rank(f), _patient_relevance(f), idx, f) for idx, f in enumerate(factors)]
+        # Use original order as a stable tiebreaker when severity/relevance are equal.
         scored.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
         return [item[3] for item in scored]
+
+    def rank_risk_factors(self, patient: PatientEHR, factors: list[str]) -> list[str]:
+        return self._rank_risk_factors(patient, factors)
 
     def score(
         self,
@@ -456,6 +460,7 @@ class RiskAnalysisService:
 class RiskArticleFilter:
     def __init__(self, recent_year_window: int = 5) -> None:
         self.recent_year_window = recent_year_window
+        self.current_year = datetime.now(UTC).year
 
     @staticmethod
     def _treatment_tokens(treatment_name: str) -> set[str]:
@@ -495,8 +500,7 @@ class RiskArticleFilter:
         if any(c.lower() in text for c in patient.comorbidities):
             score += 0.8
 
-        current_year = datetime.now(UTC).year
-        if article.year and article.year >= (current_year - self.recent_year_window) and ae_hits > 0:
+        if article.year and article.year >= (self.current_year - self.recent_year_window) and ae_hits > 0:
             score += 0.6
 
         if re.search(r"\b(mechanism|pathway|in vitro|preclinical|murine|xenograft)\b", text) and ae_hits == 0:
@@ -544,7 +548,7 @@ class PMCAEParser:
             sentence_lower = sentence.lower()
             if not sentence_lower:
                 continue
-            if re.search(r"\b(grade\s*[3-4]|grade\s*3|grade\s*4|grade\s*5)\b", sentence_lower) and (
+            if re.search(r"\b(grade\s*[3-5])\b", sentence_lower) and (
                 "neutropenia" in sentence_lower
                 or "pneumonitis" in sentence_lower
                 or "diarrhea" in sentence_lower
@@ -562,14 +566,20 @@ class PMCAEParser:
             ) and self._PERCENT_PATTERN.search(sentence_lower):
                 subgroup_signals.append(sentence.strip())
 
-        discontinuation_rate = self._DISCONT_PATTERN.search(lowered)
-        sae_rate = self._SAE_PATTERN.search(lowered)
+        discontinuation_match = self._DISCONT_PATTERN.search(lowered)
+        sae_match = self._SAE_PATTERN.search(lowered)
+        discontinuation_rate = float(discontinuation_match.group(1)) if discontinuation_match else None
+        sae_rate = float(sae_match.group(1)) if sae_match else None
+        if discontinuation_rate is not None and discontinuation_rate > 100:
+            discontinuation_rate = None
+        if sae_rate is not None and sae_rate > 100:
+            sae_rate = None
         payload = {
             "pmc_id": article.pmc_id,
             "title": article.title,
             "grade3_4_events": grade_events[:5],
-            "discontinuation_rate": float(discontinuation_rate.group(1)) if discontinuation_rate else None,
-            "sae_rate": float(sae_rate.group(1)) if sae_rate else None,
+            "discontinuation_rate": discontinuation_rate,
+            "sae_rate": sae_rate,
             "subgroup_signals": subgroup_signals[:4],
         }
         if not payload["grade3_4_events"] and payload["discontinuation_rate"] is None and payload["sae_rate"] is None:
