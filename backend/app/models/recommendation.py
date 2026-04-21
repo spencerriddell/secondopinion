@@ -43,6 +43,10 @@ class Recommendation(BaseModel):
     risk_score: float
     risk_confidence_interval: tuple[float, float]
     risk_factors: list[str] = Field(default_factory=list)
+    risk_mitigation_strategies: list[str] = Field(default_factory=list)
+    risk_confidence_grade: str = "moderate"
+    comparative_risk_narrative: str = ""
+    evidence_quality_score: float = 5.0
     efficacy_evidence: list[EfficacyEvidence] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     explanation: str

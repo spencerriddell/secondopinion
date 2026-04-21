@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import re
 
 from app.models.ehr import PatientEHR
 from app.models.evidence import GuidelineReference, PubMedArticle
+from app.models.pmc import PMCArticle
 
 # ---------------------------------------------------------------------------
 # Adverse-event keyword patterns used to scan article abstracts/titles.
@@ -18,7 +20,7 @@ _AE_KEYWORDS = re.compile(
 )
 
 _SEVERITY_KEYWORDS = re.compile(
-    r"\b(grade\s*[3-5]|severe|fatal|life.threatening|hospitali[sz]|discontinu)\b",
+    r"\b(grade\s*[3-5]|severe|fatal|life[-\s]?threatening|hospitali[sz]|discontinu)\b",
     re.IGNORECASE,
 )
 
@@ -200,7 +202,7 @@ def _apply_interaction_score(
                 factors.append("Cardiac dysfunction: anthracycline cardiotoxicity risk is substantially elevated")
         if patient.ecog >= 2:
             score += 0.5
-            factors.append("Reduced performance status limits chemotherapy tolerability")
+            factors.append("ECOG ≥2: higher grade 3-4 toxicity and early discontinuation risk with chemotherapy")
 
     # --- Targeted therapy interactions ---
     if resolved_class == "targeted":
@@ -271,6 +273,45 @@ def organ_function_poor_any(patient: PatientEHR) -> bool:
 
 
 class RiskAnalysisService:
+    _SEVERITY_RANK_PATTERNS: list[tuple[int, re.Pattern[str]]] = [
+        (4, re.compile(r"\b(grade\s*5|fatal|death|mortality)\b", re.IGNORECASE)),
+        (3, _SEVERITY_KEYWORDS),
+        (2, re.compile(r"\b(grade\s*[1-2]|mild|moderate)\b", re.IGNORECASE)),
+    ]
+
+    def _rank_risk_factors(self, patient: PatientEHR, factors: list[str]) -> list[str]:
+        def _patient_relevance(text: str) -> int:
+            lowered = text.lower()
+            relevance = 0
+            if str(patient.age) in lowered or "age" in lowered:
+                relevance += 1
+            if "ecog" in lowered:
+                relevance += 1
+            if patient.stage.value.lower() in lowered:
+                relevance += 1
+            if any(c.lower() in lowered for c in patient.comorbidities):
+                relevance += 1
+            if patient.organ_function and any(
+                f"{organ}" in lowered and getattr(patient.organ_function, organ) == "poor"
+                for organ in ("renal", "hepatic", "cardiac")
+            ):
+                relevance += 1
+            return relevance
+
+        def _severity_rank(text: str) -> int:
+            for rank, pattern in self._SEVERITY_RANK_PATTERNS:
+                if pattern.search(text):
+                    return rank
+            return 1
+
+        scored = [(_severity_rank(f), _patient_relevance(f), idx, f) for idx, f in enumerate(factors)]
+        # Use original order as a stable tiebreaker when severity/relevance are equal.
+        scored.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
+        return [item[3] for item in scored]
+
+    def rank_risk_factors(self, patient: PatientEHR, factors: list[str]) -> list[str]:
+        return self._rank_risk_factors(patient, factors)
+
     def score(
         self,
         patient: PatientEHR,
@@ -374,7 +415,8 @@ class RiskAnalysisService:
             round(max(1.0, bounded - ci_half), 1),
             round(min(10.0, bounded + ci_half), 1),
         )
-        return bounded, ci, factors
+        ranked_factors = self._rank_risk_factors(patient, factors)
+        return bounded, ci, ranked_factors
 
     def identify_contraindications(
         self,
@@ -413,3 +455,141 @@ class RiskAnalysisService:
                 issues.append({"risk": "Autoimmune condition: risk of flare and severe irAE", "severity": "high"})
 
         return issues
+
+
+class RiskArticleFilter:
+    def __init__(self, recent_year_window: int = 5) -> None:
+        self.recent_year_window = recent_year_window
+        self.current_year = datetime.now(UTC).year
+
+    @staticmethod
+    def _treatment_tokens(treatment_name: str) -> set[str]:
+        tokens = {t for t in re.findall(r"\w+", treatment_name.lower()) if len(t) > 3}
+        return tokens - {"with", "plus", "therapy", "based", "combination"}
+
+    @staticmethod
+    def _article_text(article: PubMedArticle) -> str:
+        parts = [article.title, article.abstract or "", " ".join(article.mesh_terms or [])]
+        return " ".join(parts).lower()
+
+    def score_article(self, patient: PatientEHR, treatment_name: str, article: PubMedArticle) -> float:
+        text = self._article_text(article)
+        score = 0.0
+        tx_tokens = self._treatment_tokens(treatment_name)
+        token_hits = sum(1 for t in tx_tokens if t in text)
+        score += min(2.5, 0.7 * token_hits)
+
+        ae_hits = len(_AE_KEYWORDS.findall(text))
+        score += min(2.0, 0.4 * ae_hits)
+
+        age_range_matches = re.findall(r"(\d{2})\s*[-–]\s*(\d{2})\s*(?:years?|yrs?)", text)
+        for lo, hi in age_range_matches:
+            low, high = int(lo), int(hi)
+            if low - 10 <= patient.age <= high + 10:
+                score += 1.6
+                break
+        else:
+            age_matches = re.findall(r"(?:median|mean)\s+age\s*(?:of|=|:)?\s*(\d{2})", text)
+            if any(abs(int(v) - patient.age) <= 10 for v in age_matches):
+                score += 1.3
+
+        if "ecog" in text and str(patient.ecog) in text:
+            score += 1.0
+        if f"stage {patient.stage.value.lower()}" in text:
+            score += 0.8
+        if any(c.lower() in text for c in patient.comorbidities):
+            score += 0.8
+
+        if article.year and article.year >= (self.current_year - self.recent_year_window) and ae_hits > 0:
+            score += 0.6
+
+        if re.search(r"\b(mechanism|pathway|in vitro|preclinical|murine|xenograft)\b", text) and ae_hits == 0:
+            score -= 0.8
+        return score
+
+    def rank_articles(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        articles: list[PubMedArticle],
+    ) -> list[PubMedArticle]:
+        return sorted(
+            articles,
+            key=lambda article: self.score_article(patient, treatment_name, article),
+            reverse=True,
+        )
+
+
+class PMCAEParser:
+    _PERCENT_PATTERN = re.compile(r"(\d{1,2}(?:\.\d+)?)\s*%")
+    _DISCONT_PATTERN = re.compile(
+        r"(?:discontinu(?:ation|ed)[^.%]{0,60}?(\d{1,2}(?:\.\d+)?)\s*%)",
+        re.IGNORECASE,
+    )
+    _SAE_PATTERN = re.compile(
+        r"(?:serious adverse event[s]?|sae[s]?)[^.%]{0,60}?(\d{1,2}(?:\.\d+)?)\s*%",
+        re.IGNORECASE,
+    )
+
+    def parse(self, article: PMCArticle) -> dict[str, object] | None:
+        text = " ".join(
+            filter(
+                None,
+                [article.abstract or "", article.methodology or "", article.results or "", article.conclusions or ""],
+            )
+        )
+        if not text:
+            return None
+        lowered = text.lower()
+
+        grade_events: list[str] = []
+        subgroup_signals: list[str] = []
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            sentence_lower = sentence.lower()
+            if not sentence_lower:
+                continue
+            if re.search(r"\b(grade\s*[3-5])\b", sentence_lower) and (
+                "neutropenia" in sentence_lower
+                or "pneumonitis" in sentence_lower
+                or "diarrhea" in sentence_lower
+                or "toxicity" in sentence_lower
+                or "adverse" in sentence_lower
+            ):
+                grade_events.append(sentence.strip())
+            if (
+                "ecog" in sentence_lower
+                or "elderly" in sentence_lower
+                or "renal" in sentence_lower
+                or "hepatic" in sentence_lower
+                or "prior" in sentence_lower
+                or "comorbid" in sentence_lower
+            ) and self._PERCENT_PATTERN.search(sentence_lower):
+                subgroup_signals.append(sentence.strip())
+
+        discontinuation_match = self._DISCONT_PATTERN.search(lowered)
+        sae_match = self._SAE_PATTERN.search(lowered)
+        discontinuation_rate = float(discontinuation_match.group(1)) if discontinuation_match else None
+        sae_rate = float(sae_match.group(1)) if sae_match else None
+        if discontinuation_rate is not None and discontinuation_rate > 100:
+            discontinuation_rate = None
+        if sae_rate is not None and sae_rate > 100:
+            sae_rate = None
+        payload = {
+            "pmc_id": article.pmc_id,
+            "title": article.title,
+            "grade3_4_events": grade_events[:5],
+            "discontinuation_rate": discontinuation_rate,
+            "sae_rate": sae_rate,
+            "subgroup_signals": subgroup_signals[:4],
+        }
+        if not payload["grade3_4_events"] and payload["discontinuation_rate"] is None and payload["sae_rate"] is None:
+            return None
+        return payload
+
+    def parse_many(self, pmc_articles: list[PMCArticle]) -> list[dict[str, object]]:
+        parsed: list[dict[str, object]] = []
+        for article in pmc_articles:
+            row = self.parse(article)
+            if row:
+                parsed.append(row)
+        return parsed

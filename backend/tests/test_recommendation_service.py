@@ -2,8 +2,9 @@ import asyncio
 
 from app.models.ehr import Biomarker, CancerType, Genetics, OrganFunction, PatientEHR, Stage
 from app.models.evidence import GuidelineReference, PubMedArticle
+from app.models.pmc import PMCArticle
 from app.services.recommendation_service import RecommendationService
-from app.services.risk_analysis_service import RiskAnalysisService
+from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService, RiskArticleFilter
 
 
 def _patient() -> PatientEHR:
@@ -53,6 +54,8 @@ def test_recommendation_service_falls_back_without_native_llm():
     # Risk scores should vary across treatments due to evidence-informed per-treatment scoring
     scores = [r.risk_score for r in result]
     assert len(set(scores)) > 1, "All recommendations should NOT have identical risk scores"
+    assert isinstance(result[0].risk_mitigation_strategies, list)
+    assert result[0].risk_confidence_grade in {"low", "moderate", "high"}
 
 
 def test_recommendation_service_uses_native_llm_json_payload():
@@ -164,3 +167,44 @@ def test_risk_analysis_ci_wider_without_evidence():
     assert ci_width_no_articles >= ci_width_with_articles, (
         "CI should be wider when no relevant evidence is available"
     )
+
+
+def test_risk_article_filter_prioritizes_patient_matched_recent_ae_study():
+    patient = _patient()
+    filt = RiskArticleFilter()
+    matched_recent_ae = PubMedArticle(
+        pmid="20001",
+        title="Pembrolizumab in stage IV NSCLC with ECOG 1-2: grade 3-4 neutropenia 18%",
+        authors=["A B"],
+        year=2025,
+        abstract="Median age 68 years; discontinuation 22% due to severe adverse events.",
+    )
+    mechanism_only = PubMedArticle(
+        pmid="20002",
+        title="PD-1 signaling mechanism in murine xenograft models",
+        authors=["C D"],
+        year=2025,
+        abstract="Preclinical pathway-focused mechanism paper without adverse event outcomes.",
+    )
+    ranked = filt.rank_articles(patient, "Pembrolizumab", [mechanism_only, matched_recent_ae])
+    assert ranked[0].pmid == "20001"
+
+
+def test_pmc_ae_parser_extracts_grade34_discontinuation_and_sae():
+    parser = PMCAEParser()
+    article = PMCArticle(
+        pmc_id="PMC123",
+        title="KEYNOTE-style toxicity table",
+        abstract="",
+        methodology="",
+        results=(
+            "Grade 3-4 neutropenia occurred in 18%. Serious adverse events were 12%. "
+            "Treatment discontinuation was 22%. ECOG 2 subgroup had diarrhea 28%."
+        ),
+        conclusions="",
+    )
+    parsed = parser.parse(article)
+    assert parsed is not None
+    assert parsed["discontinuation_rate"] == 22.0
+    assert parsed["sae_rate"] == 12.0
+    assert parsed["grade3_4_events"]
