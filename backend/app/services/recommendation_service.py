@@ -78,16 +78,16 @@ class RecommendationService:
 
         result: list[Recommendation] = []
         for rec in recommendations:
-            result.extend(
-                self._build_recommendations(
-                    patient,
-                    rec.get("treatment_name", "Guideline-directed therapy"),
-                    rec.get("mechanism", "Context-dependent mechanism"),
-                    rec.get("drug_class", "systemic"),
-                    rec.get("indication", "Generated from multimodal evidence"),
-                    articles,
-                )
+            built = await self._build_recommendations_with_llm_risk(
+                patient,
+                rec.get("treatment_name", "Guideline-directed therapy"),
+                rec.get("mechanism", "Context-dependent mechanism"),
+                rec.get("drug_class", "systemic"),
+                rec.get("indication", "Generated from multimodal evidence"),
+                articles,
+                guidelines,
             )
+            result.extend(built)
         if not result:
             return self._fallback_recommendations(patient, articles, guidelines)
 
@@ -111,6 +111,72 @@ class RecommendationService:
         if start != -1 and end > start:
             return stripped[start : end + 1]
         return None
+
+    async def _estimate_risk_with_llm(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str,
+        articles: list[PubMedArticle],
+        guidelines: list[GuidelineReference],
+    ) -> tuple[float, tuple[float, float], list[str]] | None:
+        if not self.llm_service.is_available:
+            return None
+
+        prompt = {
+            "task": "Estimate treatment-specific clinical risk from source evidence",
+            "patient": patient.model_dump(),
+            "treatment": {"name": treatment_name, "drug_class": drug_class},
+            "articles": [
+                {
+                    "pmid": article.pmid,
+                    "title": article.title,
+                    "year": article.year,
+                    "abstract": article.abstract,
+                }
+                for article in articles[:5]
+            ],
+            "guidelines": [g.model_dump() for g in guidelines[:3]],
+            "schema": {
+                "risk_score": "float 1.0-10.0",
+                "risk_confidence_interval": ["float", "float"],
+                "risk_factors": ["str"],
+            },
+            "instructions": (
+                "Use source evidence heavily. Focus on how real patients experienced this exact treatment "
+                "(toxicity, severe adverse events, discontinuation). Output strict JSON only. "
+                "Risk must be specific to this treatment and should not be generic."
+            ),
+        }
+
+        try:
+            text = await self.llm_service.generate(json.dumps(prompt), max_tokens=700)
+        except Exception:
+            return None
+        payload = self._extract_json_payload(text)
+        if not payload:
+            return None
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+
+        risk_score = parsed.get("risk_score")
+        risk_ci = parsed.get("risk_confidence_interval")
+        risk_factors = parsed.get("risk_factors")
+        if not isinstance(risk_score, (int, float)):
+            return None
+        if not isinstance(risk_ci, list) or len(risk_ci) != 2 or not all(isinstance(v, (int, float)) for v in risk_ci):
+            return None
+        if not isinstance(risk_factors, list) or not all(isinstance(v, str) for v in risk_factors):
+            return None
+
+        bounded_score = round(max(1.0, min(10.0, float(risk_score))), 1)
+        low = round(max(1.0, min(10.0, float(risk_ci[0]))), 1)
+        high = round(max(1.0, min(10.0, float(risk_ci[1]))), 1)
+        if low > high:
+            low, high = high, low
+        return bounded_score, (low, high), risk_factors[:8]
 
     def _fallback_recommendations(
         self,
@@ -186,6 +252,42 @@ class RecommendationService:
             )
         return recommendations[: self._target_recommendation_count]
 
+    async def _build_recommendations_with_llm_risk(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        mechanism: str,
+        drug_class: str,
+        indication_text: str,
+        articles: list[PubMedArticle],
+        guidelines: list[GuidelineReference],
+    ) -> list[Recommendation]:
+        base_risk, base_ci, base_factors = self.risk_service.score(
+            patient, treatment_name, drug_class=drug_class, articles=articles
+        )
+        llm_risk = await self._estimate_risk_with_llm(
+            patient=patient,
+            treatment_name=treatment_name,
+            drug_class=drug_class,
+            articles=articles,
+            guidelines=guidelines,
+        )
+        if llm_risk:
+            risk, ci, factors = llm_risk
+            factors = [*factors, "Risk synthesized by LLM from provided literature and guideline context."]
+        else:
+            risk, ci, factors = base_risk, base_ci, base_factors
+
+        return self._build_recommendations(
+            patient=patient,
+            treatment_name=treatment_name,
+            mechanism=mechanism,
+            drug_class=drug_class,
+            indication_text=indication_text,
+            articles=articles,
+            risk_override=(risk, ci, factors),
+        )
+
     def _build_recommendations(
         self,
         patient: PatientEHR,
@@ -194,10 +296,14 @@ class RecommendationService:
         drug_class: str,
         indication_text: str,
         articles: list[PubMedArticle],
+        risk_override: tuple[float, tuple[float, float], list[str]] | None = None,
     ) -> list[Recommendation]:
-        risk, ci, factors = self.risk_service.score(
-            patient, treatment_name, drug_class=drug_class, articles=articles
-        )
+        if risk_override is not None:
+            risk, ci, factors = risk_override
+        else:
+            risk, ci, factors = self.risk_service.score(
+                patient, treatment_name, drug_class=drug_class, articles=articles
+            )
         contraindications = [
             Contraindication(**item)
             for item in self.risk_service.identify_contraindications(
