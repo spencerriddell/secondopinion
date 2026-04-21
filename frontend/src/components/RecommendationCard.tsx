@@ -4,15 +4,19 @@ import CitationViewer from "./CitationViewer";
 import RiskVisualization from "./RiskVisualization";
 
 type Props = { recommendation: Recommendation };
+type CardProps = Props & { rank?: number };
 
-export default function RecommendationCard({ recommendation }: Props) {
+export default function RecommendationCard({ recommendation, rank }: CardProps) {
   const [open, setOpen] = useState(false);
 
   return (
-    <article className="border rounded-lg p-4 space-y-3 bg-white shadow-sm">
+    <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold text-lg">{recommendation.treatment.name}</h3>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-sky-700">
+            Recommendation {rank ?? "-"}
+          </div>
+          <h3 className="text-lg font-semibold">{recommendation.treatment.name}</h3>
           <p className="text-sm text-slate-600">{recommendation.treatment.mechanism}</p>
         </div>
         <RiskVisualization score={recommendation.risk_score} details={recommendation.risk_factors} />
@@ -28,7 +32,7 @@ export default function RecommendationCard({ recommendation }: Props) {
         </ul>
       )}
 
-      <button className="text-sm underline" onClick={() => setOpen((v) => !v)} type="button">
+      <button className="text-sm font-medium text-sky-700 underline" onClick={() => setOpen((v) => !v)} type="button">
         {open ? "Hide details" : "Show details"}
       </button>
 

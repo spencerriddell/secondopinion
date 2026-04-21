@@ -28,6 +28,9 @@ export const postRecommendations = (payload: PatientEHR) =>
     body: JSON.stringify(payload),
   });
 
+export const getSupportedBiomarkers = (cancerType: string) =>
+  request<Record<string, string>>(`/api/biomarkers/${encodeURIComponent(cancerType)}`);
+
 export const getRecommendation = (id: string) => request(`/api/recommendations/${id}`);
 export const searchEvidence = (query: string) =>
   request(`/api/evidence/search?query=${encodeURIComponent(query)}`);

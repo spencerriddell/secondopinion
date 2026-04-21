@@ -12,7 +12,7 @@ Production-ready AI-assisted clinical decision support for oncology teams. The s
 
 ### Frontend (`frontend/`)
 - React + TypeScript + Tailwind CSS + React Router
-- Patient intake workflow with core oncology inputs (cancer type, stage, biomarkers, genetics, ECOG, age, comorbidities, metastases, progression)
+- Patient intake workflow with core oncology inputs (cancer type, stage, optional multi-biomarker selection with units, genetics, ECOG, age, comorbidities, metastases, progression)
 - Recommendation display with risk visualization and citation viewer
 
 ### Deployment
@@ -78,4 +78,4 @@ Backend docs: `http://localhost:8000/docs`
 - HER2+ breast cancer
 - MSI-H colorectal cancer
 
-Each recommendation response includes treatment details, indications, contraindications, risk score (1–10), confidence interval, supporting efficacy evidence, and citations with PMID/DOI links.
+Each recommendation response includes 5 treatment options with details, indications, contraindications, risk score (1–10), confidence interval, supporting efficacy evidence, and citations with PMID/DOI links.

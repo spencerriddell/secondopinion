@@ -17,6 +17,8 @@ from app.services.llm_service import LLMService
 from app.services.risk_analysis_service import RiskAnalysisService
 
 class RecommendationService:
+    _target_recommendation_count = 5
+
     def __init__(self, llm_backend: str = "ollama", llm_model: str = "mistral", llm_endpoint: str | None = None) -> None:
         self.risk_service = RiskAnalysisService()
         self.citation_service = CitationService()
@@ -86,7 +88,19 @@ class RecommendationService:
                     articles,
                 )
             )
-        return result or self._fallback_recommendations(patient, articles, guidelines)
+        if not result:
+            return self._fallback_recommendations(patient, articles, guidelines)
+
+        fallback = self._fallback_recommendations(patient, articles, guidelines)
+        seen_treatments = {item.treatment.name for item in result}
+        for item in fallback:
+            if item.treatment.name in seen_treatments:
+                continue
+            result.append(item)
+            seen_treatments.add(item.treatment.name)
+            if len(result) >= self._target_recommendation_count:
+                break
+        return result[: self._target_recommendation_count]
 
     def _extract_json_payload(self, text: str) -> str | None:
         stripped = text.strip()
@@ -104,19 +118,73 @@ class RecommendationService:
         articles: list[PubMedArticle],
         guidelines: list[GuidelineReference],
     ) -> list[Recommendation]:
+        base_recommendations: list[tuple[str, str, str, str]] = []
         if guidelines:
             top = guidelines[0]
-            name = top.treatment
-            mechanism = "Guideline-concordant multimodal anti-cancer strategy"
-            drug_class = "multimodal"
-            indication = f"{top.organization} {top.version} recommends this approach for {top.cancer_type}."
-        else:
-            name = "Tumor board review and guideline-concordant systemic therapy"
-            mechanism = "Evidence-guided precision treatment selection"
-            drug_class = "systemic"
-            indication = "Insufficient guideline match; recommendation based on available evidence and risk profile."
+            base_recommendations.append(
+                (
+                    top.treatment,
+                    "Guideline-concordant multimodal anti-cancer strategy",
+                    "multimodal",
+                    f"{top.organization} {top.version} recommends this approach for {top.cancer_type}.",
+                )
+            )
 
-        return self._build_recommendations(patient, name, mechanism, drug_class, indication, articles)
+        cancer_type_recommendations: dict[str, list[tuple[str, str, str, str]]] = {
+            "NSCLC": [
+                ("Osimertinib", "Third-generation EGFR inhibition", "targeted", "Preferred in EGFR-altered advanced NSCLC."),
+                ("Pembrolizumab + platinum doublet", "PD-1 blockade plus cytotoxic backbone", "immunotherapy", "Appropriate for metastatic disease when biomarker and clinical context support immunotherapy."),
+                ("Alectinib", "ALK inhibition", "targeted", "Option when ALK rearrangement is present."),
+                ("Docetaxel + ramucirumab", "Anti-VEGFR2 plus cytotoxic therapy", "chemotherapy", "Consider for progression after prior systemic treatment."),
+                ("Clinical trial enrollment", "Novel targeted or immunotherapy protocols", "investigational", "Recommended when standard options are exhausted or biomarker-directed trials are available."),
+            ],
+            "breast": [
+                ("Trastuzumab + pertuzumab + taxane", "HER2 dual blockade with chemotherapy", "targeted", "Standard frontline approach in HER2-positive advanced breast cancer."),
+                ("Endocrine therapy + CDK4/6 inhibitor", "Cell-cycle arrest with hormonal suppression", "targeted", "Preferred for HR-positive disease in appropriate settings."),
+                ("Sacituzumab govitecan", "TROP-2 antibody-drug conjugate", "targeted", "Option in pretreated metastatic disease."),
+                ("Capecitabine", "Antimetabolite chemotherapy", "chemotherapy", "Useful in sequential treatment planning."),
+                ("Clinical trial enrollment", "Precision therapy expansion", "investigational", "Encouraged for biomarker-matched therapeutic strategies."),
+            ],
+            "colorectal": [
+                ("Pembrolizumab", "PD-1 inhibition", "immunotherapy", "Preferred in MSI-H/dMMR metastatic colorectal cancer."),
+                ("FOLFOX", "Cytotoxic combination chemotherapy", "chemotherapy", "Standard option for metastatic colorectal disease."),
+                ("FOLFIRI + bevacizumab", "Cytotoxic therapy with anti-VEGF inhibition", "chemotherapy", "Common sequence strategy after progression."),
+                ("Cetuximab (RAS wild-type)", "EGFR blockade", "targeted", "Appropriate in RAS wild-type tumors."),
+                ("Clinical trial enrollment", "Novel pathway-directed therapy", "investigational", "Strongly considered for refractory disease."),
+            ],
+            "melanoma": [
+                ("Nivolumab + ipilimumab", "Dual checkpoint inhibition", "immunotherapy", "High-activity option in advanced melanoma."),
+                ("Pembrolizumab", "PD-1 inhibition", "immunotherapy", "Common first-line single-agent approach."),
+                ("Dabrafenib + trametinib", "BRAF/MEK inhibition", "targeted", "Preferred in BRAF-mutant melanoma."),
+                ("Relatlimab + nivolumab", "LAG-3/PD-1 checkpoint blockade", "immunotherapy", "Alternative immunotherapy combination."),
+                ("Clinical trial enrollment", "Emerging cellular and checkpoint strategies", "investigational", "Recommended where available."),
+            ],
+            "prostate": [
+                ("Androgen deprivation therapy + ARPI", "Androgen-axis suppression", "hormonal", "Backbone strategy in advanced prostate cancer."),
+                ("Docetaxel", "Microtubule inhibition chemotherapy", "chemotherapy", "Systemic intensification option in fit patients."),
+                ("Abiraterone + prednisone", "CYP17 inhibition", "hormonal", "Useful for metastatic hormone-sensitive or castration-resistant disease."),
+                ("PARP inhibitor (BRCA-altered)", "Synthetic lethality in DNA repair deficiency", "targeted", "Recommended with qualifying homologous recombination alterations."),
+                ("Clinical trial enrollment", "Novel AR and radioligand strategies", "investigational", "Encouraged for personalized escalation."),
+            ],
+        }
+        base_recommendations.extend(cancer_type_recommendations.get(patient.cancer_type.value, []))
+
+        if not base_recommendations:
+            base_recommendations = [
+                (
+                    "Tumor board review and guideline-concordant systemic therapy",
+                    "Evidence-guided precision treatment selection",
+                    "systemic",
+                    "Insufficient guideline match; recommendation based on available evidence and risk profile.",
+                )
+            ]
+
+        recommendations: list[Recommendation] = []
+        for name, mechanism, drug_class, indication in base_recommendations[: self._target_recommendation_count]:
+            recommendations.extend(
+                self._build_recommendations(patient, name, mechanism, drug_class, indication, articles)
+            )
+        return recommendations[: self._target_recommendation_count]
 
     def _build_recommendations(
         self,

@@ -47,6 +47,7 @@ def test_recommendation_service_falls_back_without_native_llm():
     service = RecommendationService(llm_backend="onnx", llm_model="mock")
     result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
     assert result
+    assert len(result) == 5
     assert result[0].treatment.name == "Targeted Therapy"
 
 
@@ -66,4 +67,5 @@ def test_recommendation_service_uses_native_llm_json_payload():
     service.llm_service = StubLLM()
     result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
     assert result
+    assert len(result) == 5
     assert result[0].treatment.name == "Osimertinib"

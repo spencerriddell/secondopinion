@@ -26,8 +26,9 @@ export default function PatientIntake({ setResult }: Props) {
   }
 
   return (
-    <div className="space-y-3">
-      {error && <div className="bg-red-100 text-red-700 p-2 rounded">{error}</div>}
+    <div className="space-y-4">
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{error}</div>}
+      {loading && <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-700">Generating recommendations...</div>}
       <EHRForm onSubmit={onSubmit} loading={loading} />
     </div>
   );
