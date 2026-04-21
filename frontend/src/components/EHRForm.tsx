@@ -47,7 +47,6 @@ export default function EHRForm({ onSubmit, loading }: Props) {
   }, [form.cancer_type]);
 
   const biomarkerOptions = useMemo(() => Object.entries(supportedBiomarkers), [supportedBiomarkers]);
-  const geneticsOptions = useMemo(() => supportedGenetics, [supportedGenetics]);
 
   function addBiomarker() {
     setForm((current) => ({
@@ -234,7 +233,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
                 onChange={(e) => updateGenetic(index, { mutation: e.target.value })}
               >
                 <option value="">Select mutation</option>
-                {geneticsOptions.map((mutation) => (
+                {supportedGenetics.map((mutation) => (
                   <option key={mutation} value={mutation}>{mutation}</option>
                 ))}
               </select>
