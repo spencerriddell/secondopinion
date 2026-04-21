@@ -74,7 +74,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
   function addGenetic() {
     setForm((current) => ({
       ...current,
-      genetics: [...current.genetics, { mutation: "", status: "mutant" }],
+      genetics: [...current.genetics, { mutation: "", status: geneticsStatusOptions[0] }],
     }));
   }
 
