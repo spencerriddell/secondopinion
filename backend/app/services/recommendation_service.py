@@ -14,13 +14,17 @@ from app.models.recommendation import (
 )
 from app.services.citation_service import CitationService
 from app.services.llm_service import LLMService
-from app.services.risk_analysis_service import RiskAnalysisService
+from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService, RiskArticleFilter
+
+RiskOverride = tuple[float, tuple[float, float], list[str], list[str], str, str, float]
 
 class RecommendationService:
     _target_recommendation_count = 5
 
     def __init__(self, llm_backend: str = "ollama", llm_model: str = "mistral", llm_endpoint: str | None = None) -> None:
         self.risk_service = RiskAnalysisService()
+        self.risk_article_filter = RiskArticleFilter()
+        self.pmc_ae_parser = PMCAEParser()
         self.citation_service = CitationService()
         self.llm_service = LLMService(backend=llm_backend, model=llm_model, endpoint=llm_endpoint)
 
@@ -75,6 +79,19 @@ class RecommendationService:
         else:
             parsed = {"recommendations": []}
         recommendations = parsed.get("recommendations", [])
+        candidate_treatments = [
+            r.get("treatment_name", "Guideline-directed therapy")
+            for r in recommendations
+            if isinstance(r, dict)
+        ]
+        comparative_base_scores = [
+            self.risk_service.score(patient, name, articles=articles)[0]
+            for name in candidate_treatments
+        ]
+        comparative_mean_risk = (
+            round(sum(comparative_base_scores) / len(comparative_base_scores), 1)
+            if comparative_base_scores else None
+        )
 
         result: list[Recommendation] = []
         for rec in recommendations:
@@ -86,6 +103,8 @@ class RecommendationService:
                 rec.get("indication", "Generated from multimodal evidence"),
                 articles,
                 guidelines,
+                pmc_articles,
+                comparative_mean_risk,
             )
             result.extend(built)
         if not result:
@@ -119,10 +138,14 @@ class RecommendationService:
         drug_class: str,
         articles: list[PubMedArticle],
         guidelines: list[GuidelineReference],
-    ) -> tuple[float, tuple[float, float], list[str]] | None:
+        pmc_articles: list[PMCArticle],
+        comparative_mean_risk: float | None = None,
+    ) -> RiskOverride | None:
         if not self.llm_service.is_available:
             return None
 
+        ranked_articles = self.risk_article_filter.rank_articles(patient, treatment_name, articles)[:8]
+        parsed_pmc_ae = self.pmc_ae_parser.parse_many(pmc_articles)[:3]
         prompt = {
             "task": "Estimate treatment-specific clinical risk from source evidence",
             "patient": patient.model_dump(),
@@ -133,19 +156,32 @@ class RecommendationService:
                     "title": article.title,
                     "year": article.year,
                     "abstract": article.abstract,
+                    "patient_relevance_score": round(
+                        self.risk_article_filter.score_article(patient, treatment_name, article), 2
+                    ),
                 }
-                for article in articles[:5]
+                for article in ranked_articles
             ],
             "guidelines": [g.model_dump() for g in guidelines[:3]],
+            "pmc_adverse_event_tables": parsed_pmc_ae,
+            "comparative_context": {
+                "mean_risk_score_of_alternatives": comparative_mean_risk,
+                "instruction": "State whether this treatment appears lower/equal/higher risk versus alternatives."
+            },
             "schema": {
                 "risk_score": "float 1.0-10.0",
                 "risk_confidence_interval": ["float", "float"],
                 "risk_factors": ["str"],
+                "risk_mitigation_strategies": ["str"],
+                "risk_confidence_grade": "str low|moderate|high",
+                "comparative_risk_narrative": "str",
+                "evidence_quality_score": "float 1.0-10.0",
             },
             "instructions": (
-                "Use source evidence heavily. Focus on how real patients experienced this exact treatment "
-                "(toxicity, severe adverse events, discontinuation). Output strict JSON only. "
-                "Risk must be specific to this treatment and should not be generic."
+                "Use source evidence heavily. Extract specific adverse-event rates (grade 3-4+, SAE, discontinuation) "
+                "from studies and PMC full text context. Perform patient-matching analysis (age/ECOG/stage/comorbidities), "
+                "compare risk vs alternatives, provide trial-cited toxicity narrative, and include practical mitigation "
+                "strategies (e.g., prophylaxis, dose modification, monitoring). Output strict JSON only."
             ),
         }
 
@@ -164,11 +200,25 @@ class RecommendationService:
         risk_score = parsed.get("risk_score")
         risk_ci = parsed.get("risk_confidence_interval")
         risk_factors = parsed.get("risk_factors")
+        mitigation_strategies = parsed.get("risk_mitigation_strategies")
+        confidence_grade = parsed.get("risk_confidence_grade")
+        comparative_narrative = parsed.get("comparative_risk_narrative")
+        evidence_quality = parsed.get("evidence_quality_score")
         if not isinstance(risk_score, (int, float)):
             return None
         if not isinstance(risk_ci, list) or len(risk_ci) != 2 or not all(isinstance(v, (int, float)) for v in risk_ci):
             return None
         if not isinstance(risk_factors, list) or not all(isinstance(v, str) for v in risk_factors):
+            return None
+        if mitigation_strategies is not None and (
+            not isinstance(mitigation_strategies, list) or not all(isinstance(v, str) for v in mitigation_strategies)
+        ):
+            return None
+        if confidence_grade is not None and not isinstance(confidence_grade, str):
+            return None
+        if comparative_narrative is not None and not isinstance(comparative_narrative, str):
+            return None
+        if evidence_quality is not None and not isinstance(evidence_quality, (int, float)):
             return None
 
         bounded_score = round(max(1.0, min(10.0, float(risk_score))), 1)
@@ -176,7 +226,16 @@ class RecommendationService:
         high = round(max(1.0, min(10.0, float(risk_ci[1]))), 1)
         if low > high:
             low, high = high, low
-        return bounded_score, (low, high), risk_factors[:8]
+        ranked_factors = self.risk_service._rank_risk_factors(patient, risk_factors[:10])
+        return (
+            bounded_score,
+            (low, high),
+            ranked_factors[:8],
+            (mitigation_strategies or [])[:5],
+            (confidence_grade or "moderate").lower(),
+            comparative_narrative or "",
+            round(max(1.0, min(10.0, float(evidence_quality or 5.0))), 1),
+        )
 
     def _fallback_recommendations(
         self,
@@ -261,6 +320,8 @@ class RecommendationService:
         indication_text: str,
         articles: list[PubMedArticle],
         guidelines: list[GuidelineReference],
+        pmc_articles: list[PMCArticle],
+        comparative_mean_risk: float | None = None,
     ) -> list[Recommendation]:
         base_risk, base_ci, base_factors = self.risk_service.score(
             patient, treatment_name, drug_class=drug_class, articles=articles
@@ -271,12 +332,18 @@ class RecommendationService:
             drug_class=drug_class,
             articles=articles,
             guidelines=guidelines,
+            pmc_articles=pmc_articles,
+            comparative_mean_risk=comparative_mean_risk,
         )
         if llm_risk:
-            risk, ci, factors = llm_risk
+            risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score = llm_risk
             factors = [*factors, "Risk synthesized by LLM from provided literature and guideline context."]
         else:
             risk, ci, factors = base_risk, base_ci, base_factors
+            mitigation = self._build_default_mitigation(factors)
+            confidence_grade = "moderate"
+            comparative_narrative = self._build_comparative_narrative(risk, comparative_mean_risk)
+            evidence_quality_score = self._estimate_evidence_quality_score(articles, guidelines)
 
         return self._build_recommendations(
             patient=patient,
@@ -285,8 +352,44 @@ class RecommendationService:
             drug_class=drug_class,
             indication_text=indication_text,
             articles=articles,
-            risk_override=(risk, ci, factors),
+            risk_override=(risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score),
         )
+
+    def _build_default_mitigation(self, factors: list[str]) -> list[str]:
+        text = " ".join(factors).lower()
+        mitigations: list[str] = []
+        if "neutropenia" in text:
+            mitigations.append("Consider primary G-CSF prophylaxis and early CBC monitoring.")
+        if "diarrhea" in text:
+            mitigations.append("Start early anti-diarrheal plan and hydration monitoring.")
+        if "pneumonitis" in text or "colitis" in text or "hepatitis" in text:
+            mitigations.append("Use structured irAE surveillance with rapid steroid pathway when indicated.")
+        if "discontinuation" in text or "severe" in text:
+            mitigations.append("Plan proactive dose-adjustment and early toxicity follow-up.")
+        return mitigations[:4]
+
+    def _build_comparative_narrative(self, risk: float, comparative_mean_risk: float | None) -> str:
+        if comparative_mean_risk is None:
+            return ""
+        if risk >= comparative_mean_risk + 0.8:
+            return f"Higher toxicity burden than cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
+        if risk <= comparative_mean_risk - 0.8:
+            return f"Lower toxicity burden than cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
+        return f"Comparable toxicity burden to cohort alternatives (risk {risk} vs mean {comparative_mean_risk})."
+
+    def _estimate_evidence_quality_score(
+        self,
+        articles: list[PubMedArticle],
+        guidelines: list[GuidelineReference],
+    ) -> float:
+        score = 4.0
+        if articles:
+            score += min(3.0, 0.6 * len(articles[:5]))
+        if any(a.year and a.year >= 2021 for a in articles):
+            score += 1.0
+        if guidelines:
+            score += 1.0
+        return round(max(1.0, min(10.0, score)), 1)
 
     def _build_recommendations(
         self,
@@ -296,14 +399,19 @@ class RecommendationService:
         drug_class: str,
         indication_text: str,
         articles: list[PubMedArticle],
-        risk_override: tuple[float, tuple[float, float], list[str]] | None = None,
+        risk_override: RiskOverride | None = None,
     ) -> list[Recommendation]:
         if risk_override is not None:
-            risk, ci, factors = risk_override
+            risk, ci, factors, mitigation, confidence_grade, comparative_narrative, evidence_quality_score = risk_override
         else:
             risk, ci, factors = self.risk_service.score(
                 patient, treatment_name, drug_class=drug_class, articles=articles
             )
+            mitigation = self._build_default_mitigation(factors)
+            confidence_grade = "moderate"
+            comparative_narrative = ""
+            evidence_quality_score = self._estimate_evidence_quality_score(articles, [])
+        factors = self.risk_service._rank_risk_factors(patient, factors)
         contraindications = [
             Contraindication(**item)
             for item in self.risk_service.identify_contraindications(
@@ -343,6 +451,10 @@ class RecommendationService:
             risk_score=risk,
             risk_confidence_interval=ci,
             risk_factors=factors,
+            risk_mitigation_strategies=mitigation,
+            risk_confidence_grade=confidence_grade,
+            comparative_risk_narrative=comparative_narrative,
+            evidence_quality_score=evidence_quality_score,
             efficacy_evidence=efficacy,
             citations=citation_models,
             explanation=(
