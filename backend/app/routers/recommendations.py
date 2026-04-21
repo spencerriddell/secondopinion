@@ -70,11 +70,6 @@ async def create_recommendations(
     return RecommendationResponse(patient_id=patient_id, recommendations=recommendations)
 
 
-@router.get("/api/biomarkers/{cancer_type}", response_model=dict[str, str])
-def get_supported_biomarkers(cancer_type: str) -> dict[str, str]:
-    return _ehr_service.supported_biomarkers(cancer_type)
-
-
 @router.get("/api/recommendations/{recommendation_id}", response_model=Recommendation)
 async def get_recommendation(recommendation_id: str) -> Recommendation:
     recommendation = _store.get(recommendation_id)

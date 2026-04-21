@@ -18,19 +18,19 @@ export default function CitationViewer({ citations }: Props) {
   );
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded border p-3 space-y-2">
       <div className="flex items-center justify-between">
         <h4 className="font-semibold">Citations ({citations.length})</h4>
-        <select value={format} onChange={(e) => setFormat(e.target.value)} className="rounded border border-slate-200 px-2 py-1 text-sm">
+        <select value={format} onChange={(e) => setFormat(e.target.value)} className="border rounded px-2 py-1 text-sm">
           <option>Vancouver</option>
           <option>APA</option>
           <option>MLA</option>
           <option>BibTeX</option>
         </select>
       </div>
-      <pre className="whitespace-pre-wrap rounded bg-white p-2 text-xs">{text}</pre>
+      <pre className="whitespace-pre-wrap text-xs bg-slate-50 p-2 rounded">{text}</pre>
       <button
-        className="text-sm font-medium text-sky-700 underline"
+        className="text-sm underline"
         onClick={() => navigator.clipboard.writeText(text)}
         type="button"
       >
