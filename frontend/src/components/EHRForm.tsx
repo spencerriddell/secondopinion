@@ -26,6 +26,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
   const [form, setForm] = useState<PatientEHR>(initial);
   const [supportedBiomarkers, setSupportedBiomarkers] = useState<Record<string, string>>({});
   const [supportedGenetics, setSupportedGenetics] = useState<string[]>([]);
+  const defaultGeneticsStatus = "mutant";
   const geneticsStatusOptions = ["mutant", "WT", "mutation type"];
 
   useEffect(() => {
@@ -74,7 +75,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
   function addGenetic() {
     setForm((current) => ({
       ...current,
-      genetics: [...current.genetics, { mutation: "", status: geneticsStatusOptions[0] }],
+      genetics: [...current.genetics, { mutation: "", status: defaultGeneticsStatus }],
     }));
   }
 
