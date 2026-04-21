@@ -65,3 +65,33 @@ def test_ehr_service_rejects_unknown_biomarker():
                 "ecog": 1,
             }
         )
+
+
+def test_ehr_service_accepts_supported_genetics():
+    service = EHRService()
+    patient = service.parse_and_validate(
+        {
+            "cancer_type": "NSCLC",
+            "stage": "IV",
+            "biomarkers": [{"name": "EGFR", "value": "L858R"}],
+            "genetics": [{"mutation": "EGFR", "status": "mutant"}],
+            "age": 62,
+            "ecog": 1,
+        }
+    )
+    assert patient.genetics[0].mutation == "EGFR"
+
+
+def test_ehr_service_rejects_unknown_genetics():
+    service = EHRService()
+    with pytest.raises(ValueError):
+        service.parse_and_validate(
+            {
+                "cancer_type": "NSCLC",
+                "stage": "IV",
+                "biomarkers": [{"name": "EGFR", "value": "L858R"}],
+                "genetics": [{"mutation": "BRCA1", "status": "mutant"}],
+                "age": 62,
+                "ecog": 1,
+            }
+        )

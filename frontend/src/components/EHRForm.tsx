@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { PatientEHR } from "../types";
-import { getSupportedBiomarkers } from "../services/api";
+import { getSupportedBiomarkers, getSupportedGenetics } from "../services/api";
 
 type Props = {
   onSubmit: (payload: PatientEHR) => Promise<void>;
@@ -12,7 +12,7 @@ const initial: PatientEHR = {
   cancer_type: "NSCLC",
   stage: "IV",
   biomarkers: [],
-  genetics: [{ mutation: "EGFR", status: "wildtype" }],
+  genetics: [],
   age: 65,
   ecog: 1,
   comorbidities: [],
@@ -25,15 +25,21 @@ const initial: PatientEHR = {
 export default function EHRForm({ onSubmit, loading }: Props) {
   const [form, setForm] = useState<PatientEHR>(initial);
   const [supportedBiomarkers, setSupportedBiomarkers] = useState<Record<string, string>>({});
+  const [supportedGenetics, setSupportedGenetics] = useState<string[]>([]);
+  const geneticsStatusOptions = ["mutant", "WT", "mutation type"];
 
   useEffect(() => {
     let alive = true;
-    getSupportedBiomarkers(form.cancer_type)
-      .then((data) => {
-        if (alive) setSupportedBiomarkers(data);
+    Promise.all([getSupportedBiomarkers(form.cancer_type), getSupportedGenetics(form.cancer_type)])
+      .then(([biomarkers, genetics]) => {
+        if (!alive) return;
+        setSupportedBiomarkers(biomarkers);
+        setSupportedGenetics(genetics);
       })
       .catch(() => {
-        if (alive) setSupportedBiomarkers({});
+        if (!alive) return;
+        setSupportedBiomarkers({});
+        setSupportedGenetics([]);
       });
     return () => {
       alive = false;
@@ -41,6 +47,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
   }, [form.cancer_type]);
 
   const biomarkerOptions = useMemo(() => Object.entries(supportedBiomarkers), [supportedBiomarkers]);
+  const geneticsOptions = useMemo(() => supportedGenetics, [supportedGenetics]);
 
   function addBiomarker() {
     setForm((current) => ({
@@ -65,6 +72,29 @@ export default function EHRForm({ onSubmit, loading }: Props) {
     }));
   }
 
+  function addGenetic() {
+    setForm((current) => ({
+      ...current,
+      genetics: [...current.genetics, { mutation: "", status: "mutant" }],
+    }));
+  }
+
+  function updateGenetic(index: number, patch: { mutation?: string; status?: string }) {
+    setForm((current) => ({
+      ...current,
+      genetics: current.genetics.map((item, currentIndex) =>
+        currentIndex === index ? { ...item, ...patch } : item,
+      ),
+    }));
+  }
+
+  function removeGenetic(index: number) {
+    setForm((current) => ({
+      ...current,
+      genetics: current.genetics.filter((_, currentIndex) => currentIndex !== index),
+    }));
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     await onSubmit({
@@ -76,6 +106,12 @@ export default function EHRForm({ onSubmit, loading }: Props) {
           name: item.name.trim(),
           value: item.value.trim(),
           unit: item.name ? supportedBiomarkers[item.name.trim()] || item.unit : item.unit,
+        })),
+      genetics: form.genetics
+        .filter((item) => item.mutation.trim())
+        .map((item) => ({
+          mutation: item.mutation.trim(),
+          status: item.status.trim() || "mutant",
         })),
     });
   }
@@ -91,7 +127,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
           <select
             className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm focus:border-sky-400 focus:outline-none"
             value={form.cancer_type}
-            onChange={(e) => setForm({ ...form, cancer_type: e.target.value, biomarkers: [] })}
+            onChange={(e) => setForm({ ...form, cancer_type: e.target.value, biomarkers: [], genetics: [] })}
           >
             <option>NSCLC</option><option>breast</option><option>colorectal</option><option>melanoma</option><option>prostate</option>
           </select>
@@ -166,6 +202,54 @@ export default function EHRForm({ onSubmit, loading }: Props) {
               <button
                 type="button"
                 onClick={() => removeBiomarker(index)}
+                className="rounded-lg border border-red-200 px-2 py-2 text-sm text-red-600 transition hover:bg-red-50"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-800">Genetics (optional)</h3>
+          <button
+            type="button"
+            onClick={addGenetic}
+            className="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100"
+          >
+            + Add genetic mutation
+          </button>
+        </div>
+        {form.genetics.length === 0 && (
+          <p className="text-sm text-slate-500">No genetics selected.</p>
+        )}
+        <div className="space-y-2">
+          {form.genetics.map((genetic, index) => (
+            <div key={index} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[1.4fr_1fr_auto]">
+              <select
+                className="rounded-lg border border-slate-200 p-2 text-sm focus:border-sky-400 focus:outline-none"
+                value={genetic.mutation}
+                onChange={(e) => updateGenetic(index, { mutation: e.target.value })}
+              >
+                <option value="">Select mutation</option>
+                {geneticsOptions.map((mutation) => (
+                  <option key={mutation} value={mutation}>{mutation}</option>
+                ))}
+              </select>
+              <select
+                className="rounded-lg border border-slate-200 p-2 text-sm focus:border-sky-400 focus:outline-none"
+                value={genetic.status}
+                onChange={(e) => updateGenetic(index, { status: e.target.value })}
+              >
+                {geneticsStatusOptions.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => removeGenetic(index)}
                 className="rounded-lg border border-red-200 px-2 py-2 text-sm text-red-600 transition hover:bg-red-50"
               >
                 Remove
