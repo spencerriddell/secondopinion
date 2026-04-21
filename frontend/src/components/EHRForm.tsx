@@ -111,7 +111,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
         .filter((item) => item.mutation.trim())
         .map((item) => ({
           mutation: item.mutation.trim(),
-          status: item.status.trim() || "mutant",
+          status: item.status.trim(),
         })),
     });
   }
