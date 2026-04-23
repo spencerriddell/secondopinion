@@ -34,6 +34,9 @@ export const getSupportedBiomarkers = (cancerType: string) =>
 export const getSupportedGenetics = (cancerType: string) =>
   request<string[]>(`/api/genetics/${encodeURIComponent(cancerType)}`);
 
+export const getSupportedGeneticVariants = (cancerType: string) =>
+  request<Record<string, string[]>>(`/api/genetics/${encodeURIComponent(cancerType)}/variants`);
+
 export const getRecommendation = (id: string) => request(`/api/recommendations/${id}`);
 export const searchEvidence = (query: string) =>
   request(`/api/evidence/search?query=${encodeURIComponent(query)}`);

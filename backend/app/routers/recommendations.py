@@ -80,6 +80,11 @@ def get_supported_genetics(cancer_type: str) -> list[str]:
     return _ehr_service.supported_genetics(cancer_type)
 
 
+@router.get("/api/genetics/{cancer_type}/variants", response_model=dict[str, list[str]])
+def get_supported_genetic_variants(cancer_type: str) -> dict[str, list[str]]:
+    return _ehr_service.supported_genetic_variants(cancer_type)
+
+
 @router.get("/api/recommendations/{recommendation_id}", response_model=Recommendation)
 async def get_recommendation(recommendation_id: str) -> Recommendation:
     recommendation = _store.get(recommendation_id)

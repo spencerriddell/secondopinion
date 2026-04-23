@@ -95,3 +95,10 @@ def test_ehr_service_rejects_unknown_genetics():
                 "ecog": 1,
             }
         )
+
+
+def test_ehr_service_exposes_gene_specific_variants():
+    service = EHRService()
+    variants = service.supported_genetic_variants("NSCLC")
+    assert "KRAS" in variants
+    assert "G12C mutant" in variants["KRAS"]

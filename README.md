@@ -26,6 +26,9 @@ Production-ready AI-assisted clinical decision support for oncology teams. The s
 - `POST /api/recommendations`
 - `GET /api/recommendations/{recommendation_id}`
 - `GET /api/recommendations/patient/{patient_id}`
+- `GET /api/biomarkers/{cancer_type}`
+- `GET /api/genetics/{cancer_type}`
+- `GET /api/genetics/{cancer_type}/variants`
 - `GET /api/evidence/{pmid}`
 - `GET /api/evidence/search?query=...`
 - `GET /api/guidelines/search?cancer_type=...&treatment=...`
