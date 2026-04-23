@@ -9,6 +9,11 @@ class CancerType(str, Enum):
     colorectal = "colorectal"
     melanoma = "melanoma"
     prostate = "prostate"
+    ovarian = "ovarian"
+    pancreatic = "pancreatic"
+    gastric = "gastric"
+    hcc = "hcc"
+    rcc = "rcc"
 
 
 class Stage(str, Enum):
