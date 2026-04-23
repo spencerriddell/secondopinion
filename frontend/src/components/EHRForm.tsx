@@ -106,13 +106,9 @@ export default function EHRForm({ onSubmit, loading }: Props) {
     return supportedGeneticVariants[mutation] || defaultGeneticsStatusOptions;
   }
 
-  function geneticStatusOptionsFor(mutation: string): string[] {
-    return statusOptionsForMutation(mutation);
-  }
-
-  function biomarkerPlaceholder(name: string, unit?: string): string {
+  function biomarkerPlaceholder(name: string, fallbackUnit?: string): string {
     if (!name) return "Level / result";
-    const resolvedUnit = supportedBiomarkers[name] || unit;
+    const resolvedUnit = supportedBiomarkers[name] || fallbackUnit;
     return resolvedUnit ? `Level / result (${resolvedUnit})` : "Level / result";
   }
 
@@ -268,7 +264,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
                 value={genetic.status}
                 onChange={(e) => updateGenetic(index, { status: e.target.value })}
               >
-                {geneticStatusOptionsFor(genetic.mutation).map((status) => (
+                {statusOptionsForMutation(genetic.mutation).map((status) => (
                   <option key={status} value={status}>{status}</option>
                 ))}
               </select>
