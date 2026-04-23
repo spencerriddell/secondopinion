@@ -102,12 +102,18 @@ export default function EHRForm({ onSubmit, loading }: Props) {
     }));
   }
 
-  function geneticStatusOptionsFor(mutation: string, currentStatus: string): string[] {
-    const options = supportedGeneticVariants[mutation] || defaultGeneticsStatusOptions;
-    if (currentStatus && !options.includes(currentStatus)) {
-      return [currentStatus, ...options];
-    }
-    return options;
+  function statusOptionsForMutation(mutation: string): string[] {
+    return supportedGeneticVariants[mutation] || defaultGeneticsStatusOptions;
+  }
+
+  function geneticStatusOptionsFor(mutation: string): string[] {
+    return statusOptionsForMutation(mutation);
+  }
+
+  function biomarkerPlaceholder(name: string, unit?: string): string {
+    if (!name) return "Level / result";
+    const resolvedUnit = supportedBiomarkers[name] || unit;
+    return resolvedUnit ? `Level / result (${resolvedUnit})` : "Level / result";
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -207,7 +213,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
               </select>
               <input
                 className="rounded-lg border border-slate-200 p-2 text-sm focus:border-sky-400 focus:outline-none"
-                placeholder={`Level / result${biomarker.name ? ` (${supportedBiomarkers[biomarker.name] || biomarker.unit || ""})` : ""}`}
+                placeholder={biomarkerPlaceholder(biomarker.name, biomarker.unit)}
                 value={biomarker.value}
                 onChange={(e) => updateBiomarker(index, { value: e.target.value })}
               />
@@ -248,7 +254,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
                 value={genetic.mutation}
                 onChange={(e) => {
                   const mutation = e.target.value;
-                  const options = supportedGeneticVariants[mutation] || defaultGeneticsStatusOptions;
+                  const options = statusOptionsForMutation(mutation);
                   updateGenetic(index, { mutation, status: options[0] || defaultGeneticsStatus });
                 }}
               >
@@ -262,7 +268,7 @@ export default function EHRForm({ onSubmit, loading }: Props) {
                 value={genetic.status}
                 onChange={(e) => updateGenetic(index, { status: e.target.value })}
               >
-                {geneticStatusOptionsFor(genetic.mutation, genetic.status).map((status) => (
+                {geneticStatusOptionsFor(genetic.mutation).map((status) => (
                   <option key={status} value={status}>{status}</option>
                 ))}
               </select>
