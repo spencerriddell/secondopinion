@@ -58,3 +58,11 @@ def test_get_supported_genetics():
     data = response.json()
     assert "EGFR" in data
     assert "ALK" in data
+
+
+def test_get_supported_genetic_variants():
+    response = client.get("/api/genetics/NSCLC/variants")
+    assert response.status_code == 200
+    data = response.json()
+    assert "KRAS" in data
+    assert "G12C mutant" in data["KRAS"]
