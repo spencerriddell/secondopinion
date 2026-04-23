@@ -69,6 +69,15 @@ _TREATMENT_ADJUSTMENTS: dict[str, tuple[float, str]] = {
     "sacituzumab govitecan": (0.9, "Severe neutropenia 51%, diarrhea 10%; ASCENT trial"),
 }
 
+_BASE_SCORE = 1.5
+_LAYER_LABELS: dict[int, str] = {
+    1: "Patient",
+    2: "Treatment class",
+    3: "Drug-specific",
+    4: "Interactions",
+    5: "Evidence",
+}
+
 
 def _detect_drug_class(treatment_name: str, drug_class: str) -> str:
     """Normalise to one of the keys in _CLASS_BASELINE."""
@@ -157,6 +166,7 @@ def _apply_interaction_score(
     resolved_class: str,
     score: float,
     factors: list[str],
+    breakdown: list[dict[str, int | float | str]] | None = None,
 ) -> float:
     """
     Apply patient-treatment interaction adjustments.
@@ -164,96 +174,91 @@ def _apply_interaction_score(
     """
     lowered = treatment_name.lower()
 
+    def add(delta: float, factor: str) -> None:
+        nonlocal score
+        score += delta
+        factors.append(factor)
+        if breakdown is not None:
+            breakdown.append(
+                {
+                    "layer": 4,
+                    "layer_name": _LAYER_LABELS[4],
+                    "factor": factor,
+                    "contribution": round(delta, 2),
+                    "impact_type": "risk-mitigating" if delta < 0 else "risk-elevating",
+                }
+            )
+
     # --- Immunotherapy interactions ---
     if resolved_class == "immunotherapy":
         if any("autoimmune" in c.lower() for c in patient.comorbidities):
-            score += 1.0
-            factors.append("Active autoimmune condition: increased irAE risk with checkpoint inhibition")
+            add(1.0, "Active autoimmune condition: increased irAE risk with checkpoint inhibition")
         if any("transplant" in c.lower() for c in patient.comorbidities):
-            score += 1.5
-            factors.append("Organ transplant history: high risk of graft rejection with checkpoint inhibitors")
+            add(1.5, "Organ transplant history: high risk of graft rejection with checkpoint inhibitors")
         if any("ibd" in c.lower() or "colitis" in c.lower() or "crohn" in c.lower()
                for c in patient.comorbidities):
-            score += 0.8
-            factors.append("Inflammatory bowel disease: elevated immune-related colitis risk")
+            add(0.8, "Inflammatory bowel disease: elevated immune-related colitis risk")
         if patient.age >= 75:
-            score += 0.4
-            factors.append("Advanced age increases severity of immune-related adverse events")
+            add(0.4, "Advanced age increases severity of immune-related adverse events")
 
     # --- Chemotherapy interactions ---
     if resolved_class == "chemotherapy":
         if patient.organ_function and patient.organ_function.renal == "poor":
             if any(kw in lowered for kw in ("cisplatin", "carboplatin", "platinum")):
-                score += 1.5
-                factors.append("Renal impairment: platinum compound nephrotoxicity risk is high")
+                add(1.5, "Renal impairment: platinum compound nephrotoxicity risk is high")
             else:
-                score += 0.5
-                factors.append("Renal impairment: reduced clearance may potentiate chemotherapy exposure")
+                add(0.5, "Renal impairment: reduced clearance may potentiate chemotherapy exposure")
         if patient.organ_function and patient.organ_function.hepatic == "poor":
             if any(kw in lowered for kw in ("docetaxel", "paclitaxel", "taxane")):
-                score += 1.3
-                factors.append("Hepatic impairment: taxane clearance impaired; elevated AUC and toxicity")
+                add(1.3, "Hepatic impairment: taxane clearance impaired; elevated AUC and toxicity")
             else:
-                score += 0.6
-                factors.append("Hepatic impairment: reduced chemotherapy metabolism increases toxicity risk")
+                add(0.6, "Hepatic impairment: reduced chemotherapy metabolism increases toxicity risk")
         if patient.organ_function and patient.organ_function.cardiac == "poor":
             if any(kw in lowered for kw in ("doxorubicin", "anthracycline", "epirubicin")):
-                score += 1.4
-                factors.append("Cardiac dysfunction: anthracycline cardiotoxicity risk is substantially elevated")
+                add(1.4, "Cardiac dysfunction: anthracycline cardiotoxicity risk is substantially elevated")
         if patient.ecog >= 2:
-            score += 0.5
-            factors.append("ECOG ≥2: higher grade 3-4 toxicity and early discontinuation risk with chemotherapy")
+            add(0.5, "ECOG ≥2: higher grade 3-4 toxicity and early discontinuation risk with chemotherapy")
 
     # --- Targeted therapy interactions ---
     if resolved_class == "targeted":
         if organ_function_poor_any(patient):
-            score += 0.4
-            factors.append("Organ dysfunction may impair targeted agent metabolism/clearance")
+            add(0.4, "Organ dysfunction may impair targeted agent metabolism/clearance")
         # Biomarker match bonus (reduces risk when treatment aligns with biomarker)
         biomarker_names = {b.name.upper() for b in patient.biomarkers}
         genetics_muts = {g.mutation.upper() for g in patient.genetics}
         if "osimertinib" in lowered or "egfr" in lowered:
             if "EGFR" in biomarker_names or "EGFR" in genetics_muts:
-                score -= 0.5
-                factors.append("EGFR biomarker match: treatment is precisely indicated — lowers relative risk")
+                add(-0.5, "EGFR biomarker match: treatment is precisely indicated — lowers relative risk")
         if "alectinib" in lowered or "alk" in lowered:
             if "ALK" in biomarker_names or "ALK" in genetics_muts:
-                score -= 0.4
-                factors.append("ALK rearrangement confirmed: alectinib is first-line indicated")
+                add(-0.4, "ALK rearrangement confirmed: alectinib is first-line indicated")
         if "trastuzumab" in lowered or "her2" in lowered:
             if "HER2" in biomarker_names:
-                score -= 0.4
-                factors.append("HER2-positive status: trastuzumab-based therapy is guideline-indicated")
+                add(-0.4, "HER2-positive status: trastuzumab-based therapy is guideline-indicated")
         if ("parp" in lowered or "brca" in lowered) and (
             "BRCA1" in biomarker_names or "BRCA2" in biomarker_names
             or "BRCA2" in genetics_muts or "BRCA1" in genetics_muts
         ):
-            score -= 0.4
-            factors.append("BRCA alteration confirmed: PARP inhibitor is precisely indicated")
+            add(-0.4, "BRCA alteration confirmed: PARP inhibitor is precisely indicated")
 
     # --- Hormonal therapy interactions ---
     if resolved_class == "hormonal":
         if any("cardiovascular" in c.lower() or "heart" in c.lower() or "hypertension" in c.lower()
                for c in patient.comorbidities):
-            score += 0.4
-            factors.append("Cardiovascular comorbidity: ADT/ARPI metabolic effects increase cardiac risk")
+            add(0.4, "Cardiovascular comorbidity: ADT/ARPI metabolic effects increase cardiac risk")
         if any("osteoporosis" in c.lower() or "fracture" in c.lower() for c in patient.comorbidities):
-            score += 0.3
-            factors.append("Bone fragility: hormonal therapy accelerates bone loss risk")
+            add(0.3, "Bone fragility: hormonal therapy accelerates bone loss risk")
 
     # --- Prior treatment interactions ---
     if patient.prior_treatments:
         prior_lower = [t.lower() for t in patient.prior_treatments]
         if resolved_class == "chemotherapy" and any("chemo" in t or "platin" in t for t in prior_lower):
-            score += 0.4
-            factors.append("Prior chemotherapy: cumulative toxicity and reduced marrow reserve")
+            add(0.4, "Prior chemotherapy: cumulative toxicity and reduced marrow reserve")
         if resolved_class == "immunotherapy" and any("immuno" in t or "pembrolizumab" in t
                                                        or "nivolumab" in t for t in prior_lower):
-            score += 0.5
-            factors.append("Prior immunotherapy: re-challenge increases risk of severe irAE recurrence")
+            add(0.5, "Prior immunotherapy: re-challenge increases risk of severe irAE recurrence")
         if patient.progression:
-            score += 0.3
-            factors.append("Active disease progression: systemic burden raises treatment risk")
+            add(0.3, "Active disease progression: systemic burden raises treatment risk")
 
     return score
 
@@ -320,6 +325,23 @@ class RiskAnalysisService:
         articles: list[PubMedArticle] | None = None,
         guidelines: list[GuidelineReference] | None = None,
     ) -> tuple[float, tuple[float, float], list[str]]:
+        score, ci, factors, _ = self.score_with_breakdown(
+            patient=patient,
+            treatment_name=treatment_name,
+            drug_class=drug_class,
+            articles=articles,
+            guidelines=guidelines,
+        )
+        return score, ci, factors
+
+    def score_with_breakdown(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str = "",
+        articles: list[PubMedArticle] | None = None,
+        guidelines: list[GuidelineReference] | None = None,
+    ) -> tuple[float, tuple[float, float], list[str], list[dict[str, int | float | str]]]:
         """
         Return (risk_score, confidence_interval, risk_factors).
 
@@ -330,65 +352,90 @@ class RiskAnalysisService:
         4. Patient-treatment interaction checks (organ function, biomarkers/genetics, prior tx)
         5. Evidence-signal scan from retrieved PubMed articles (real patient experience)
         """
+        del guidelines
         articles = articles or []
-        score = 1.5
+        score = _BASE_SCORE
         factors: list[str] = []
+        breakdown: list[dict[str, int | float | str]] = []
+
+        def add(layer: int, delta: float, factor: str, impact_type: str | None = None) -> None:
+            nonlocal score
+            score += delta
+            factors.append(factor)
+            inferred_impact = impact_type
+            if inferred_impact is None:
+                inferred_impact = "risk-mitigating" if delta < 0 else "risk-elevating"
+            breakdown.append(
+                {
+                    "layer": layer,
+                    "layer_name": _LAYER_LABELS[layer],
+                    "factor": factor,
+                    "contribution": round(delta, 2),
+                    "impact_type": inferred_impact,
+                }
+            )
 
         # --- Layer 1: patient factors ---
         if patient.age >= 75:
-            score += 1.5
-            factors.append("Advanced age (≥75): increased vulnerability to most therapies")
+            add(1, 1.5, "Advanced age (≥75): increased vulnerability to most therapies")
         elif patient.age >= 65:
-            score += 0.8
-            factors.append("Older age (65–74): moderate age-related risk increment")
+            add(1, 0.8, "Older age (65–74): moderate age-related risk increment")
 
         if patient.ecog >= 3:
-            score += 2.2
-            factors.append("Poor ECOG performance status (≥3): limits treatment tolerance")
+            add(1, 2.2, "Poor ECOG performance status (≥3): limits treatment tolerance")
         elif patient.ecog == 2:
-            score += 1.0
-            factors.append("Intermediate ECOG performance status (2)")
+            add(1, 1.0, "Intermediate ECOG performance status (2)")
 
         if patient.stage.value == "IV":
-            score += 1.8
-            factors.append("Metastatic stage IV disease: complex management, higher overall risk")
+            add(1, 1.8, "Metastatic stage IV disease: complex management, higher overall risk")
         elif patient.stage.value == "III":
-            score += 0.9
-            factors.append("Locally advanced disease (stage III)")
+            add(1, 0.9, "Locally advanced disease (stage III)")
 
         if patient.metastases:
-            score += min(1.5, 0.4 * len(patient.metastases))
+            delta = min(1.5, 0.4 * len(patient.metastases))
             sites = ", ".join(patient.metastases[:3])
-            factors.append(f"Metastatic burden ({len(patient.metastases)} site(s): {sites})")
+            add(1, delta, f"Metastatic burden ({len(patient.metastases)} site(s): {sites})")
 
         if patient.comorbidities:
-            score += min(1.2, 0.25 * len(patient.comorbidities))
+            delta = min(1.2, 0.25 * len(patient.comorbidities))
             conds = ", ".join(patient.comorbidities[:3])
-            factors.append(f"Comorbidities ({len(patient.comorbidities)}: {conds})")
+            add(1, delta, f"Comorbidities ({len(patient.comorbidities)}: {conds})")
 
         # --- Layer 2: treatment-class baseline ---
         resolved_class = _detect_drug_class(treatment_name, drug_class)
         class_offset = _CLASS_BASELINE.get(resolved_class, 1.2)
-        score += class_offset
-        factors.append(
-            f"{resolved_class.title()} class: published AE profile offset {class_offset:+.1f}"
+        add(
+            2,
+            class_offset,
+            f"{resolved_class.title()} class: published AE profile offset {class_offset:+.1f}",
         )
 
         # --- Layer 3: per-treatment landmark adjustment ---
         lowered_tx = treatment_name.lower()
         for tx_key, (adj, rationale) in _TREATMENT_ADJUSTMENTS.items():
             if tx_key in lowered_tx:
-                score += adj
-                factors.append(rationale)
+                add(3, adj, rationale)
                 break
 
         # --- Layer 4: patient-treatment interactions ---
-        score = _apply_interaction_score(patient, treatment_name, resolved_class, score, factors)
+        score = _apply_interaction_score(
+            patient, treatment_name, resolved_class, score, factors, breakdown=breakdown
+        )
 
         # --- Layer 5: evidence signal from PubMed articles ---
         evidence_delta, evidence_factors = _evidence_adverse_signal(treatment_name, articles)
         score += evidence_delta
         factors.extend(evidence_factors)
+        if evidence_delta and evidence_factors:
+            breakdown.append(
+                {
+                    "layer": 5,
+                    "layer_name": _LAYER_LABELS[5],
+                    "factor": evidence_factors[0],
+                    "contribution": round(evidence_delta, 2),
+                    "impact_type": "evidence-based",
+                }
+            )
 
         # CI: wider when evidence base is sparse for this treatment
         # _CI_HALF_* constants reflect decreasing uncertainty as evidence volume grows.
@@ -416,7 +463,7 @@ class RiskAnalysisService:
             round(min(10.0, bounded + ci_half), 1),
         )
         ranked_factors = self._rank_risk_factors(patient, factors)
-        return bounded, ci, ranked_factors
+        return bounded, ci, ranked_factors, breakdown
 
     def identify_contraindications(
         self,

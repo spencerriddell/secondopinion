@@ -39,6 +39,7 @@ class EHRService:
             "TMB": "mut/Mb",
         },
         "gastric": {"HER2": "score", "PD-L1": "%", "MSI": "status", "MMR": "status", "TP53": "variant", "EGFR": "variant", "TMB": "mut/Mb"},
+        "endometrial": {"MSI": "status", "MMR": "status", "POLE": "variant", "PTEN": "status", "PD-L1": "%", "TMB": "mut/Mb"},
         "hcc": {"TP53": "variant", "CTNNB1": "variant", "AFP": "ng/mL", "PD-L1": "%"},
         "rcc": {"VHL": "variant", "PBRM1": "variant", "BAP1": "variant", "PD-L1": "%", "TMB": "mut/Mb"},
     }
@@ -51,6 +52,7 @@ class EHRService:
         "ovarian": ["BRCA1", "BRCA2", "TP53", "CCNE1", "PALB2"],
         "pancreatic": ["KRAS", "TP53", "CDKN2A", "SMAD4", "BRCA1", "BRCA2", "ATM", "PALB2"],
         "gastric": ["HER2", "PD-L1", "MSI", "TP53", "EGFR", "CDH1"],
+        "endometrial": ["MSI", "MMR", "POLE", "PTEN", "PIK3CA", "TP53", "ARID1A"],
         "hcc": ["TP53", "CTNNB1", "TERT", "AXIN1"],
         "rcc": ["VHL", "PBRM1", "BAP1", "SETD2", "MTOR"],
     }
@@ -285,6 +287,24 @@ class EHRService:
             ],
             "EGFR": ["Amplified", "G719X mutant", "L861Q mutant", "S768I mutant", "WT"],
             "CDH1": ["Loss-of-function mutant", "Truncating mutant", "WT"],
+        },
+        "endometrial": {
+            "MSI": ["MSI-High", "MSI-Low", "MSS"],
+            "MMR": ["dMMR", "pMMR"],
+            "POLE": ["Pathogenic exonuclease-domain mutant", "Likely pathogenic mutant", "WT"],
+            "PTEN": ["Loss-of-function mutant", "Truncating mutant", "WT"],
+            "PIK3CA": ["H1047R mutant", "E545K mutant", "E542K mutant", "WT"],
+            "TP53": [
+                "R175H mutant",
+                "R248Q mutant",
+                "R273H mutant",
+                "Missense mutant",
+                "Truncating mutant",
+                "Frameshift mutant",
+                "Splice-site mutant",
+                "WT",
+            ],
+            "ARID1A": ["Loss-of-function mutant", "Truncating mutant", "WT"],
         },
         "hcc": {
             "TP53": [

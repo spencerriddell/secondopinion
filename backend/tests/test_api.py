@@ -37,6 +37,8 @@ def test_create_and_get_recommendation():
     assert data["patient_id"] == "patient-123"
     assert data["recommendations"]
     assert len(data["recommendations"]) == 5
+    assert data["recommendations"][0]["risk_base_score"] == 1.5
+    assert isinstance(data["recommendations"][0]["risk_factor_breakdown"], list)
 
     rec_id = data["recommendations"][0]["recommendation_id"]
     rec = client.get(f"/api/recommendations/{rec_id}")
@@ -102,3 +104,20 @@ def test_get_supported_genetic_variants_for_new_cancer_type():
     assert "BRCA1" in data
     assert "Pathogenic truncating variant" in data["BRCA1"]
     assert "CCNE1" in data
+
+
+def test_get_supported_biomarkers_for_endometrial():
+    response = client.get("/api/biomarkers/endometrial")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["MSI"] == "status"
+    assert data["POLE"] == "variant"
+    assert data["PTEN"] == "status"
+
+
+def test_get_supported_genetic_variants_for_endometrial():
+    response = client.get("/api/genetics/endometrial/variants")
+    assert response.status_code == 200
+    data = response.json()
+    assert "POLE" in data
+    assert "Pathogenic exonuclease-domain mutant" in data["POLE"]

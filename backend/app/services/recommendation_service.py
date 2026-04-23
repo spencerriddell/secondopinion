@@ -22,8 +22,10 @@ from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService,
 @dataclass
 class RiskOverride:
     risk_score: float
+    risk_base_score: float
     risk_confidence_interval: tuple[float, float]
     risk_factors: list[str]
+    risk_factor_breakdown: list[dict[str, int | float | str]]
     risk_mitigation_strategies: list[str]
     risk_confidence_grade: str
     comparative_risk_narrative: str
@@ -250,8 +252,10 @@ class RecommendationService:
         )
         return RiskOverride(
             risk_score=bounded_score,
+            risk_base_score=1.5,
             risk_confidence_interval=(low, high),
             risk_factors=ranked_factors[: self._MAX_LLM_FACTOR_OUTPUT],
+            risk_factor_breakdown=[],
             risk_mitigation_strategies=(mitigation_strategies or [])[:5],
             risk_confidence_grade=(confidence_grade or "moderate").lower(),
             comparative_risk_narrative=comparative_narrative or "",
@@ -344,7 +348,7 @@ class RecommendationService:
         pmc_articles: list[PMCArticle],
         comparative_mean_risk: float | None = None,
     ) -> list[Recommendation]:
-        base_risk, base_ci, base_factors = self.risk_service.score(
+        base_risk, base_ci, base_factors, base_breakdown = self.risk_service.score_with_breakdown(
             patient, treatment_name, drug_class=drug_class, articles=articles
         )
         llm_risk = await self._estimate_risk_with_llm(
@@ -381,8 +385,10 @@ class RecommendationService:
             articles=articles,
             risk_override=RiskOverride(
                 risk_score=risk,
+                risk_base_score=1.5,
                 risk_confidence_interval=ci,
                 risk_factors=factors,
+                risk_factor_breakdown=base_breakdown,
                 risk_mitigation_strategies=mitigation,
                 risk_confidence_grade=confidence_grade,
                 comparative_risk_narrative=comparative_narrative,
@@ -439,16 +445,19 @@ class RecommendationService:
     ) -> list[Recommendation]:
         if risk_override is not None:
             risk = risk_override.risk_score
+            risk_base_score = risk_override.risk_base_score
             ci = risk_override.risk_confidence_interval
             factors = risk_override.risk_factors
+            factor_breakdown = risk_override.risk_factor_breakdown
             mitigation = risk_override.risk_mitigation_strategies
             confidence_grade = risk_override.risk_confidence_grade
             comparative_narrative = risk_override.comparative_risk_narrative
             evidence_quality_score = risk_override.evidence_quality_score
         else:
-            risk, ci, factors = self.risk_service.score(
+            risk, ci, factors, factor_breakdown = self.risk_service.score_with_breakdown(
                 patient, treatment_name, drug_class=drug_class, articles=articles
             )
+            risk_base_score = 1.5
             factors = self.risk_service.rank_risk_factors(patient, factors)
             mitigation = self._build_default_mitigation(factors)
             confidence_grade = "moderate"
@@ -491,8 +500,10 @@ class RecommendationService:
             indication=Indication(clinical_rationale=indication_text),
             contraindication=contraindications,
             risk_score=risk,
+            risk_base_score=risk_base_score,
             risk_confidence_interval=ci,
             risk_factors=factors,
+            risk_factor_breakdown=factor_breakdown,
             risk_mitigation_strategies=mitigation,
             risk_confidence_grade=confidence_grade,
             comparative_risk_narrative=comparative_narrative,
