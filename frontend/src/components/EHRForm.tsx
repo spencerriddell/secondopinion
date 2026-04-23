@@ -251,7 +251,17 @@ export default function EHRForm({ onSubmit, loading }: Props) {
                 onChange={(e) => {
                   const mutation = e.target.value;
                   const options = statusOptionsForMutation(mutation);
-                  updateGenetic(index, { mutation, status: options[0] || defaultGeneticsStatus });
+                  setForm((current) => ({
+                    ...current,
+                    genetics: current.genetics.map((item, currentIndex) =>
+                      currentIndex === index
+                        ? {
+                            mutation,
+                            status: options.includes(item.status) ? item.status : (options[0] || defaultGeneticsStatus),
+                          }
+                        : item,
+                    ),
+                  }));
                 }}
               >
                 <option value="">Select mutation</option>
