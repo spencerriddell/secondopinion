@@ -82,3 +82,14 @@ Backend docs: `http://localhost:8000/docs`
 - MSI-H colorectal cancer
 
 Each recommendation response includes 5 treatment options with details, indications, contraindications, risk score (1–10), confidence interval, supporting efficacy evidence, and citations with PMID/DOI links.
+
+## Risk Assessment Methodology
+
+Risk scoring uses a 5-layer additive model:
+1. **Patient factors** (age, stage, ECOG, comorbidities, metastatic burden, organ function)
+2. **Treatment-class baseline** (class-level toxicity profile)
+3. **Drug-specific adjustments** (landmark trial toxicity context)
+4. **Patient-treatment interactions** (biomarker matches, prior exposure, organ-function interactions)
+5. **Evidence signals** (adverse-event mentions in retrieved PubMed sources)
+
+The model starts with a base score of **1.5**, then applies layer-by-layer positive (risk-elevating) and negative (risk-mitigating) contributions before bounding to a 1–10 scale.

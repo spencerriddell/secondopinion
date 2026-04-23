@@ -146,7 +146,16 @@ export default function EHRForm({ onSubmit, loading }: Props) {
             value={form.cancer_type}
             onChange={(e) => setForm({ ...form, cancer_type: e.target.value, biomarkers: [], genetics: [] })}
           >
-            <option>NSCLC</option><option>breast</option><option>colorectal</option><option>melanoma</option><option>prostate</option>
+            <option value="NSCLC">NSCLC</option>
+            <option value="breast">Breast</option>
+            <option value="colorectal">Colorectal</option>
+            <option value="melanoma">Melanoma</option>
+            <option value="prostate">Prostate</option>
+            <option value="ovarian">Ovarian</option>
+            <option value="pancreatic">Pancreatic</option>
+            <option value="gastric">Gastric/GEJ</option>
+            <option value="endometrial">Endometrial</option>
+            <option value="rcc">Renal cell carcinoma</option>
           </select>
         </label>
         <label className="text-sm font-medium text-slate-700">Stage

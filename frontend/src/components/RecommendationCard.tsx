@@ -24,8 +24,10 @@ export default function RecommendationCard({ recommendation, rank }: CardProps) 
         </div>
         <RiskVisualization
           score={recommendation.risk_score}
+          baseScore={recommendation.risk_base_score}
           ci={recommendation.risk_confidence_interval}
           details={recommendation.risk_factors}
+          breakdown={recommendation.risk_factor_breakdown}
         />
       </div>
 

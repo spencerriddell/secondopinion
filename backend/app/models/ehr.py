@@ -12,6 +12,7 @@ class CancerType(str, Enum):
     ovarian = "ovarian"
     pancreatic = "pancreatic"
     gastric = "gastric"
+    endometrial = "endometrial"
     hcc = "hcc"
     rcc = "rcc"
 

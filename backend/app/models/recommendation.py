@@ -34,6 +34,14 @@ class Citation(BaseModel):
     formatted: str | None = None
 
 
+class RiskFactorContribution(BaseModel):
+    layer: int
+    layer_name: str
+    factor: str
+    contribution: float
+    impact_type: str
+
+
 class Recommendation(BaseModel):
     recommendation_id: str
     patient_id: str
@@ -41,8 +49,10 @@ class Recommendation(BaseModel):
     indication: Indication
     contraindication: list[Contraindication] = Field(default_factory=list)
     risk_score: float
+    risk_base_score: float = 1.5
     risk_confidence_interval: tuple[float, float]
     risk_factors: list[str] = Field(default_factory=list)
+    risk_factor_breakdown: list[RiskFactorContribution] = Field(default_factory=list)
     risk_mitigation_strategies: list[str] = Field(default_factory=list)
     risk_confidence_grade: str = "moderate"
     comparative_risk_narrative: str = ""

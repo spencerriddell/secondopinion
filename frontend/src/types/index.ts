@@ -23,8 +23,16 @@ export type Recommendation = {
   indication: { clinical_rationale: string };
   contraindication: { risk: string; severity: string }[];
   risk_score: number;
+  risk_base_score?: number;
   risk_confidence_interval: [number, number];
   risk_factors: string[];
+  risk_factor_breakdown?: {
+    layer: number;
+    layer_name: string;
+    factor: string;
+    contribution: number;
+    impact_type: string;
+  }[];
   efficacy_evidence: { trial_name: string; pmid?: string }[];
   citations: { pmid: string; doi?: string; title: string; authors: string[]; formatted?: string }[];
   explanation: string;
