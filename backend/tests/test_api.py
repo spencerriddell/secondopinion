@@ -66,3 +66,39 @@ def test_get_supported_genetic_variants():
     data = response.json()
     assert "KRAS" in data
     assert "G12C mutant" in data["KRAS"]
+
+
+def test_get_supported_biomarkers_for_new_cancer_type():
+    response = client.get("/api/biomarkers/gastric")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["PD-L1"] == "%"
+    assert data["MSI"] == "status"
+    assert data["TMB"] == "mut/Mb"
+
+
+def test_get_supported_genetics_for_new_cancer_type():
+    response = client.get("/api/genetics/pancreatic")
+    assert response.status_code == 200
+    data = response.json()
+    assert "KRAS" in data
+    assert "SMAD4" in data
+    assert "BRCA2" in data
+
+
+def test_get_supported_genetic_variants_expansion():
+    response = client.get("/api/genetics/NSCLC/variants")
+    assert response.status_code == 200
+    data = response.json()
+    assert "G12A mutant" in data["KRAS"]
+    assert "A146T mutant" in data["KRAS"]
+    assert "G719X mutant" in data["EGFR"]
+
+
+def test_get_supported_genetic_variants_for_new_cancer_type():
+    response = client.get("/api/genetics/ovarian/variants")
+    assert response.status_code == 200
+    data = response.json()
+    assert "BRCA1" in data
+    assert "Pathogenic truncating variant" in data["BRCA1"]
+    assert "CCNE1" in data
