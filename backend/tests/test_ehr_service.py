@@ -10,7 +10,7 @@ def test_ehr_service_accepts_supported_biomarker():
             "patient_id": "p1",
             "cancer_type": "NSCLC",
             "stage": "IV",
-            "biomarkers": [{"name": "EGFR", "value": "L858R"}],
+            "biomarkers": [{"name": "CEA", "value": "3.2"}],
             "genetics": [],
             "age": 62,
             "ecog": 1,
@@ -31,7 +31,7 @@ def test_ehr_service_accepts_multiple_biomarkers_and_optional_empty_list():
         {
             "cancer_type": "NSCLC",
             "stage": "IV",
-            "biomarkers": [{"name": "EGFR", "value": "L858R"}, {"name": "PD-L1", "value": "55", "unit": "%"}],
+            "biomarkers": [{"name": "CEA", "value": "3.2"}, {"name": "PD-L1", "value": "55", "unit": "%"}],
             "genetics": [],
             "age": 62,
             "ecog": 1,
@@ -73,7 +73,7 @@ def test_ehr_service_accepts_supported_genetics():
         {
             "cancer_type": "NSCLC",
             "stage": "IV",
-            "biomarkers": [{"name": "EGFR", "value": "L858R"}],
+            "biomarkers": [{"name": "CEA", "value": "3.2"}],
             "genetics": [{"mutation": "EGFR", "status": "mutant"}],
             "age": 62,
             "ecog": 1,
@@ -89,7 +89,7 @@ def test_ehr_service_rejects_unknown_genetics():
             {
                 "cancer_type": "NSCLC",
                 "stage": "IV",
-                "biomarkers": [{"name": "EGFR", "value": "L858R"}],
+                "biomarkers": [{"name": "CEA", "value": "3.2"}],
                 "genetics": [{"mutation": "BRCA1", "status": "mutant"}],
                 "age": 62,
                 "ecog": 1,
@@ -110,7 +110,7 @@ def test_ehr_service_accepts_new_cancer_type_inputs():
         {
             "cancer_type": "ovarian",
             "stage": "III",
-            "biomarkers": [{"name": "BRCA1", "value": "Pathogenic truncating variant"}],
+            "biomarkers": [{"name": "CA-125", "value": "350"}],
             "genetics": [{"mutation": "TP53", "status": "mutant"}],
             "age": 58,
             "ecog": 1,
