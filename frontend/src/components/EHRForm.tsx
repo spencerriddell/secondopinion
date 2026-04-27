@@ -25,6 +25,8 @@ const initial: PatientEHR = {
 
 export default function EHRForm({ onSubmit, loading }: Props) {
   const [form, setForm] = useState<PatientEHR>(initial);
+  const [ageText, setAgeText] = useState<string>(String(initial.age));
+  const [ageError, setAgeError] = useState<string>("");
   const [supportedBiomarkers, setSupportedBiomarkers] = useState<Record<string, string>>({});
   const [supportedGenetics, setSupportedGenetics] = useState<string[]>([]);
   const [supportedGeneticVariants, setSupportedGeneticVariants] = useState<Record<string, string[]>>({});
@@ -113,10 +115,32 @@ export default function EHRForm({ onSubmit, loading }: Props) {
     return resolvedUnit ? `Level / result (${resolvedUnit})` : "Level / result";
   }
 
+  function validateAge(value: string): string {
+    if (value.trim() === "") return "Age is required.";
+    const num = Number(value);
+    if (isNaN(num) || !Number.isInteger(num)) return "Age must be a whole number.";
+    if (num < 0 || num > 110) return "Age must be between 0 and 110.";
+    return "";
+  }
+
+  function handleAgeBlur() {
+    const error = validateAge(ageText);
+    setAgeError(error);
+    if (!error) {
+      setForm((current) => ({ ...current, age: Number(ageText) }));
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    const error = validateAge(ageText);
+    if (error) {
+      setAgeError(error);
+      return;
+    }
     await onSubmit({
       ...form,
+      age: Number(ageText),
       biomarkers: form.biomarkers
         .filter((item) => item.name.trim() && item.value.trim())
         .map((item) => ({
@@ -170,11 +194,14 @@ export default function EHRForm({ onSubmit, loading }: Props) {
         </label>
         <label className="text-sm font-medium text-slate-700">Age
           <input
-            type="number"
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm focus:border-sky-400 focus:outline-none"
-            value={form.age}
-            onChange={(e) => setForm({ ...form, age: Number(e.target.value) })}
+            type="text"
+            inputMode="numeric"
+            className={`mt-1 w-full rounded-lg border p-2.5 shadow-sm focus:outline-none ${ageError ? "border-red-400 bg-red-50 focus:border-red-500" : "border-slate-200 bg-white focus:border-sky-400"}`}
+            value={ageText}
+            onChange={(e) => { setAgeText(e.target.value); if (ageError) setAgeError(validateAge(e.target.value)); }}
+            onBlur={handleAgeBlur}
           />
+          {ageError && <p className="mt-1 text-xs text-red-600">{ageError}</p>}
         </label>
         <label className="text-sm font-medium text-slate-700">ECOG
           <select
@@ -188,8 +215,11 @@ export default function EHRForm({ onSubmit, loading }: Props) {
       </div>
 
       <section className="relative isolate space-y-3 rounded-xl border border-sky-200 bg-sky-50/40 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-sky-800">Biomarkers (optional)</h3>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-sky-800">Serum / Blood Biomarkers (optional)</h3>
+            <p className="mt-0.5 text-xs text-sky-600">Serum or blood sample results with units — e.g., PSA (ng/mL), CA-125 (U/mL), CEA (ng/mL)</p>
+          </div>
           <button
             type="button"
             onClick={addBiomarker}
