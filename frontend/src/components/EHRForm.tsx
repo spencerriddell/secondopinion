@@ -16,6 +16,7 @@ const initial: PatientEHR = {
   age: 65,
   ecog: 1,
   comorbidities: [],
+  concurrent_medications: [],
   metastases: [],
   progression: true,
   prior_treatments: [],
@@ -186,9 +187,9 @@ export default function EHRForm({ onSubmit, loading }: Props) {
         </label>
       </div>
 
-      <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+      <section className="relative isolate space-y-3 rounded-xl border border-sky-200 bg-sky-50/40 p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-slate-800">Biomarkers (optional)</h3>
+          <h3 className="text-sm font-semibold text-sky-800">Biomarkers (optional)</h3>
           <button
             type="button"
             onClick={addBiomarker}
@@ -237,13 +238,13 @@ export default function EHRForm({ onSubmit, loading }: Props) {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+      <section className="relative isolate space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-slate-800">Genetics (optional)</h3>
+          <h3 className="text-sm font-semibold text-violet-800">Genetics (optional)</h3>
           <button
             type="button"
             onClick={addGenetic}
-            className="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100"
+            className="rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 transition hover:bg-violet-100"
           >
             + Add genetic mutation
           </button>
@@ -303,6 +304,14 @@ export default function EHRForm({ onSubmit, loading }: Props) {
         <input
           className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm focus:border-sky-400 focus:outline-none"
           onChange={(e) => setForm({ ...form, comorbidities: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })}
+        />
+      </label>
+
+      <label className="block text-sm font-medium text-slate-700">Concurrent medications (comma-separated)
+        <input
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm focus:border-sky-400 focus:outline-none"
+          placeholder="e.g. metformin, atorvastatin, aspirin"
+          onChange={(e) => setForm({ ...form, concurrent_medications: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })}
         />
       </label>
 

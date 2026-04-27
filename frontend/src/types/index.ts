@@ -10,6 +10,7 @@ export type PatientEHR = {
   age: number;
   ecog: number;
   comorbidities: string[];
+  concurrent_medications: string[];
   metastases: string[];
   progression: boolean;
   prior_treatments: string[];

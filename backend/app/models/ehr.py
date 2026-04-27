@@ -50,12 +50,13 @@ class PatientEHR(BaseModel):
     age: int = Field(ge=18, le=120)
     ecog: int = Field(ge=0, le=5)
     comorbidities: list[str] = Field(default_factory=list)
+    concurrent_medications: list[str] = Field(default_factory=list)
     metastases: list[str] = Field(default_factory=list)
     progression: bool = False
     prior_treatments: list[str] = Field(default_factory=list)
     organ_function: OrganFunction | None = None
 
-    @field_validator("comorbidities", "metastases", "prior_treatments")
+    @field_validator("comorbidities", "concurrent_medications", "metastases", "prior_treatments")
     @classmethod
     def normalize_list_values(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()]
