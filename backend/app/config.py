@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     pubmed_api_key: str | None = Field(default=None, alias="PUBMED_API_KEY")
     pmc_email: str | None = Field(default=None, alias="PMC_EMAIL")
     pmc_batch_size: int = Field(default=5, alias="PMC_BATCH_SIZE")
+    min_recommendations: int = Field(default=3, alias="MIN_RECOMMENDATIONS")
+    max_recommendations: int = Field(default=15, alias="MAX_RECOMMENDATIONS")
 
 
 @lru_cache

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import re
+from typing import TYPE_CHECKING
 
 from app.models.ehr import PatientEHR
 from app.models.evidence import GuidelineReference, PubMedArticle
 from app.models.pmc import PMCArticle
+
+if TYPE_CHECKING:
+    from app.services.llm_service import LLMService
 
 # ---------------------------------------------------------------------------
 # Adverse-event keyword patterns used to scan article abstracts/titles.
@@ -640,3 +645,217 @@ class PMCAEParser:
             if row:
                 parsed.append(row)
         return parsed
+
+
+class LLMRiskAnalysisService:
+    """
+    Dynamic risk analysis using LLM-driven synthesis instead of hardcoded values.
+
+    Replaces the static ``_CLASS_BASELINE`` / ``_TREATMENT_ADJUSTMENTS`` dictionaries
+    with a prompt-based approach that generates patient-specific risk factors.
+    Falls back gracefully to ``RiskAnalysisService`` when the LLM is unavailable or
+    returns an unparseable response.
+    """
+
+    def __init__(
+        self,
+        llm_service: LLMService,
+        fallback_service: RiskAnalysisService | None = None,
+    ) -> None:
+        self.llm_service = llm_service
+        self.fallback_service = fallback_service or RiskAnalysisService()
+
+    async def analyze_risk_factors(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str = "",
+        articles: list[PubMedArticle] | None = None,
+        guidelines: list[GuidelineReference] | None = None,
+    ) -> dict[str, object]:
+        """
+        Generate patient-specific risk analysis.
+
+        Returns a dict with keys:
+            score       – float 1.0–10.0
+            ci          – tuple[float, float]
+            factors     – list[str]  (ranked most-severe first)
+            reasoning   – str
+            breakdown   – list[dict]
+        """
+        articles = articles or []
+        guidelines = guidelines or []
+
+        if not self.llm_service.is_available:
+            return self._fallback(patient, treatment_name, drug_class, articles, reason="LLM unavailable")
+
+        prompt = self._build_risk_prompt(patient, treatment_name, drug_class, articles, guidelines)
+        try:
+            text = await self.llm_service.generate(json.dumps(prompt), max_tokens=800)
+        except Exception:
+            return self._fallback(patient, treatment_name, drug_class, articles, reason="LLM error")
+
+        return self._parse_risk_response(text, patient, treatment_name, drug_class, articles)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_risk_prompt(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str,
+        articles: list[PubMedArticle],
+        guidelines: list[GuidelineReference],
+    ) -> dict[str, object]:
+        """Build a structured JSON prompt for the LLM risk analysis call."""
+        evidence = [
+            {
+                "pmid": a.pmid,
+                "title": a.title,
+                "year": a.year,
+                "abstract": (a.abstract or "")[:300],
+            }
+            for a in articles[:5]
+        ]
+        organ = patient.organ_function.model_dump() if patient.organ_function else {}
+        return {
+            "task": (
+                "Analyze the risk of severe toxicity (grade 3–5 adverse events) "
+                "for this patient receiving this treatment."
+            ),
+            "patient": {
+                "age": patient.age,
+                "ecog": patient.ecog,
+                "stage": patient.stage.value,
+                "comorbidities": patient.comorbidities,
+                "metastases": patient.metastases or [],
+                "biomarkers": [{"name": b.name, "value": b.value} for b in patient.biomarkers],
+                "genetics": [{"mutation": g.mutation, "status": g.status} for g in patient.genetics],
+                "organ_function": organ,
+                "prior_treatments": patient.prior_treatments or [],
+            },
+            "treatment": {"name": treatment_name, "drug_class": drug_class},
+            "evidence": evidence,
+            "guidelines": [g.model_dump() for g in guidelines[:2]],
+            "schema": {
+                "risk_score": "float 1.0-10.0",
+                "confidence_interval": ["float lower", "float upper"],
+                "risk_factors": [
+                    {
+                        "factor": "str description",
+                        "contribution": "float delta (positive=elevating, negative=mitigating)",
+                        "type": "risk-elevating|risk-mitigating",
+                    }
+                ],
+                "reasoning": "str explanation of scoring rationale",
+                "layer_breakdown": [
+                    {
+                        "layer": "int 1-5",
+                        "layer_name": "str",
+                        "factor": "str",
+                        "contribution": "float",
+                        "impact_type": "str",
+                    }
+                ],
+            },
+            "instructions": (
+                "Synthesize patient-specific risk considering: patient demographics and comorbidities, "
+                "drug-class toxicity profile, evidence from the supplied literature, "
+                "and patient–treatment biomarker/organ-function interactions. "
+                "Output strict JSON only matching the schema."
+            ),
+        }
+
+    def _parse_risk_response(
+        self,
+        text: str,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str,
+        articles: list[PubMedArticle],
+    ) -> dict[str, object]:
+        """Extract and validate the structured risk data from the LLM response."""
+        stripped = text.strip()
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        payload = stripped[start : end + 1] if start != -1 and end > start else ""
+
+        try:
+            parsed: dict[str, object] = json.loads(payload) if payload else {}
+        except json.JSONDecodeError:
+            parsed = {}
+
+        risk_score = parsed.get("risk_score")
+        if not isinstance(risk_score, (int, float)):
+            return self._fallback(patient, treatment_name, drug_class, articles, reason="LLM parse error")
+
+        bounded = round(max(1.0, min(10.0, float(risk_score))), 1)
+
+        ci_raw = parsed.get("confidence_interval", [])
+        if isinstance(ci_raw, list) and len(ci_raw) == 2 and all(isinstance(v, (int, float)) for v in ci_raw):
+            low = round(max(1.0, min(10.0, float(ci_raw[0]))), 1)
+            high = round(max(1.0, min(10.0, float(ci_raw[1]))), 1)
+            if low > high:
+                low, high = high, low
+        else:
+            low = round(max(1.0, bounded - 1.0), 1)
+            high = round(min(10.0, bounded + 1.0), 1)
+
+        raw_factors = parsed.get("risk_factors", [])
+        factors: list[str] = []
+        for entry in raw_factors if isinstance(raw_factors, list) else []:
+            if isinstance(entry, str):
+                factors.append(entry)
+            elif isinstance(entry, dict):
+                factor_text = entry.get("factor", "")
+                if factor_text:
+                    contribution = entry.get("contribution", 0)
+                    if isinstance(contribution, (int, float)):
+                        factors.append(f"{factor_text} (delta: {contribution:+.1f})")
+                    else:
+                        factors.append(str(factor_text))
+
+        ranked_factors = self.fallback_service.rank_risk_factors(patient, factors) if factors else factors
+        if ranked_factors:
+            ranked_factors = [
+                *ranked_factors,
+                f"Risk synthesized by LLM from patient profile and {len(articles)} evidence source(s).",
+            ]
+
+        breakdown = parsed.get("layer_breakdown", [])
+        if not isinstance(breakdown, list):
+            breakdown = []
+
+        reasoning = parsed.get("reasoning") or "LLM-synthesized risk analysis"
+
+        return {
+            "score": bounded,
+            "ci": (low, high),
+            "factors": ranked_factors,
+            "reasoning": str(reasoning),
+            "breakdown": breakdown,
+        }
+
+    def _fallback(
+        self,
+        patient: PatientEHR,
+        treatment_name: str,
+        drug_class: str,
+        articles: list[PubMedArticle],
+        reason: str = "",
+    ) -> dict[str, object]:
+        """Delegate to rule-based ``RiskAnalysisService`` when LLM is unavailable."""
+        score, ci, factors, breakdown = self.fallback_service.score_with_breakdown(
+            patient, treatment_name, drug_class=drug_class, articles=articles
+        )
+        if reason:
+            factors = [*factors, f"Rule-based scoring used ({reason})."]
+        return {
+            "score": score,
+            "ci": ci,
+            "factors": factors,
+            "reasoning": f"Rule-based scoring ({reason})" if reason else "Rule-based scoring",
+            "breakdown": breakdown,
+        }
