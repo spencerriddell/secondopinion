@@ -51,12 +51,9 @@ class LLMService:
         return await asyncio.to_thread(self._generate_ollama, prompt, options)
 
     def _generate_ollama(self, prompt: str, options: dict) -> str:
-        kwargs: dict[str, object] = {}
-        if self.endpoint:
-            kwargs["host"] = self.endpoint
-
         try:
-            response = ollama.chat(
+            client = ollama.Client(host=self.endpoint) if self.endpoint else ollama.Client()
+            response = client.chat(
                 model=self.model,
                 messages=[
                     {
@@ -69,7 +66,6 @@ class LLMService:
                     {"role": "user", "content": prompt},
                 ],
                 options=options,
-                **kwargs,
             )
         except Exception as exc:
             logger.error(
