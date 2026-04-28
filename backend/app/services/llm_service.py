@@ -60,7 +60,7 @@ class LLMService:
                         "role": "system",
                         "content": (
                             "You are an oncology clinical decision support assistant. "
-                            "Return only valid JSON with the requested schema."
+                            "Respond with ONLY a valid JSON object. No explanation, no markdown, no code fences. Start your response with { and end with }."
                         ),
                     },
                     {"role": "user", "content": prompt},
