@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ from app.models.recommendation import (
 from app.services.citation_service import CitationService
 from app.services.llm_service import LLMService
 from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService, RiskArticleFilter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,6 +63,12 @@ class RecommendationService:
             self._min_recommendations = min_recommendations
         if max_recommendations is not None:
             self._max_recommendations = max_recommendations
+        logger.info(
+            "RecommendationService initialized: llm_available=%s backend=%s model=%s",
+            self.llm_service.is_available,
+            llm_backend,
+            llm_model,
+        )
 
     async def generate(
         self,
@@ -70,7 +79,17 @@ class RecommendationService:
     ) -> list[Recommendation]:
         pmc_articles = pmc_articles or []
         if self.llm_service.is_available:
+            logger.info(
+                "generate: using LLM path cancer_type=%s stage=%s",
+                patient.cancer_type,
+                patient.stage,
+            )
             return await self._generate_with_native_llm(patient, articles, guidelines, pmc_articles)
+        logger.info(
+            "generate: LLM unavailable, using rule-based fallback cancer_type=%s stage=%s",
+            patient.cancer_type,
+            patient.stage,
+        )
         return self._fallback_recommendations(patient, articles, guidelines)
 
     async def _generate_with_native_llm(
@@ -99,8 +118,16 @@ class RecommendationService:
         }
 
         try:
+            logger.debug(
+                "LLM recommendation generation starting: model=%s",
+                getattr(self.llm_service, "model", "unknown"),
+            )
             text = await self.llm_service.generate(json.dumps(prompt), max_tokens=1000)
-        except Exception:
+            logger.debug(
+                "LLM recommendation generation complete: response_length=%d", len(text)
+            )
+        except Exception as exc:
+            logger.warning("LLM recommendation generation failed, falling back: error=%s", exc)
             return self._fallback_recommendations(patient, articles, guidelines)
 
         payload = self._extract_json_payload(text)
@@ -139,6 +166,17 @@ class RecommendationService:
                 comparative_mean_risk,
             )
             result.extend(built)
+        llm_risk_count = sum(
+            1
+            for r in result
+            if any("Risk synthesized by LLM" in f for f in r.risk_factors)
+        )
+        logger.info(
+            "LLM path risk summary: treatments=%d llm_risk=%d fallback_risk=%d",
+            len(result),
+            llm_risk_count,
+            len(result) - llm_risk_count,
+        )
         if not result:
             return self._fallback_recommendations(patient, articles, guidelines)
 
@@ -220,8 +258,21 @@ class RecommendationService:
         }
 
         try:
+            logger.debug(
+                "LLM risk estimation starting: treatment=%s model=%s",
+                treatment_name,
+                getattr(self.llm_service, "model", "unknown"),
+            )
             text = await self.llm_service.generate(json.dumps(prompt), max_tokens=700)
-        except Exception:
+            logger.debug(
+                "LLM risk estimation response received: treatment=%s response_length=%d",
+                treatment_name,
+                len(text),
+            )
+        except Exception as exc:
+            logger.warning(
+                "LLM risk estimation failed: treatment=%s error=%s", treatment_name, exc
+            )
             return None
         payload = self._extract_json_payload(text)
         if not payload:
@@ -374,6 +425,11 @@ class RecommendationService:
             comparative_mean_risk=comparative_mean_risk,
         )
         if llm_risk:
+            logger.debug(
+                "Risk for '%s': using LLM-generated risk score=%.1f",
+                treatment_name,
+                llm_risk.risk_score,
+            )
             risk = llm_risk.risk_score
             ci = llm_risk.risk_confidence_interval
             factors = llm_risk.risk_factors
@@ -383,6 +439,11 @@ class RecommendationService:
             evidence_quality_score = llm_risk.evidence_quality_score
             factors = [*factors, "Risk synthesized by LLM from provided literature and guideline context."]
         else:
+            logger.debug(
+                "Risk for '%s': LLM risk unavailable, using rule-based score=%.1f",
+                treatment_name,
+                base_risk,
+            )
             risk, ci, factors = base_risk, base_ci, base_factors
             mitigation = self._build_default_mitigation(factors)
             confidence_grade = "moderate"
