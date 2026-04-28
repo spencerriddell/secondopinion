@@ -383,3 +383,125 @@ def test_llm_recommendations_exceed_five_with_high_max():
     result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
     assert len(result) > 5
     assert len(result) <= 15
+
+
+# ---------------------------------------------------------------------------
+# _safe_parse_json tests
+# ---------------------------------------------------------------------------
+
+
+def _make_service() -> RecommendationService:
+    """Return a RecommendationService with the LLM disabled (no network calls)."""
+    return RecommendationService(llm_backend="onnx", llm_model="mock")
+
+
+def test_safe_parse_json_pure_json():
+    """Pure JSON object is parsed correctly."""
+    svc = _make_service()
+    data = {"recommendations": [{"treatment_name": "Osimertinib"}]}
+    result = svc._safe_parse_json(json.dumps(data))
+    assert result == data
+
+
+def test_safe_parse_json_json_fence():
+    """JSON wrapped in ```json ... ``` fences is parsed correctly."""
+    svc = _make_service()
+    text = '```json\n{"recommendations": [{"treatment_name": "Osimertinib"}]}\n```'
+    result = svc._safe_parse_json(text)
+    assert result is not None
+    assert result["recommendations"][0]["treatment_name"] == "Osimertinib"
+
+
+def test_safe_parse_json_leading_trailing_text():
+    """JSON embedded in leading/trailing prose is extracted correctly."""
+    svc = _make_service()
+    text = (
+        "Sure, here is the result:\n"
+        '{"recommendations": [{"treatment_name": "Pembrolizumab", "mechanism": "PD-1 blockade", '
+        '"drug_class": "immunotherapy", "indication": "NSCLC"}]}\n'
+        "Let me know if you need anything else."
+    )
+    result = svc._safe_parse_json(text)
+    assert result is not None
+    assert result["recommendations"][0]["treatment_name"] == "Pembrolizumab"
+
+
+def test_safe_parse_json_invalid_json_returns_none():
+    """Completely invalid JSON returns None without raising."""
+    svc = _make_service()
+    result = svc._safe_parse_json("this is not json at all")
+    assert result is None
+
+
+def test_safe_parse_json_invalid_json_triggers_fallback():
+    """Invalid JSON from LLM does not raise; service falls back to rule-based recommendations."""
+
+    class _StubBadJSON:
+        is_available = True
+
+        async def generate(self, prompt: str, max_tokens: int = 1000) -> str:
+            return "sorry, I cannot provide a JSON response right now."
+
+    service = RecommendationService(llm_backend="onnx", llm_model="mock")
+    service.llm_service = _StubBadJSON()
+    # Should not raise; should return fallback recommendations
+    result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
+    assert result
+    assert len(result) >= service._min_recommendations
+
+
+# ---------------------------------------------------------------------------
+# LLMService JSON mode / backwards-compat tests
+# ---------------------------------------------------------------------------
+
+
+def test_llm_service_json_mode_enabled(monkeypatch):
+    """LLMService._generate_ollama uses format='json' when client supports it."""
+    import app.services.llm_service as llm_mod
+
+    calls: list[dict] = []
+
+    class _FakeClient:
+        def __init__(self, **_kw):
+            pass
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            return {"message": {"content": '{"ok": true}'}}
+
+    monkeypatch.setattr(llm_mod, "ollama", type("_M", (), {"Client": _FakeClient})())
+    from app.services.llm_service import LLMService
+
+    svc = LLMService(backend="ollama", model="mistral")
+    result = svc._generate_ollama("hello", {})
+    assert calls, "chat() was not called"
+    assert calls[0].get("format") == "json", "format='json' should be passed to chat()"
+    assert result == '{"ok": true}'
+
+
+def test_llm_service_json_mode_fallback_on_type_error(monkeypatch):
+    """LLMService._generate_ollama falls back gracefully when client raises TypeError on format kwarg."""
+    import app.services.llm_service as llm_mod
+
+    calls: list[dict] = []
+
+    class _FakeClientTypeError:
+        def __init__(self, host=None):
+            pass
+
+        def chat(self, **kwargs):
+            if "format" in kwargs:
+                raise TypeError("unexpected keyword argument 'format'")
+            calls.append(kwargs)
+            return {"message": {"content": '{"ok": true}'}}
+
+    fake_ollama = type("_M", (), {"Client": _FakeClientTypeError})()
+    monkeypatch.setattr(llm_mod, "ollama", fake_ollama)
+
+    from app.services.llm_service import LLMService
+
+    svc = LLMService(backend="ollama", model="mistral")
+    result = svc._generate_ollama("hello", {})
+    assert calls, "fallback chat() was not called"
+    assert "format" not in calls[0], "format kwarg should not be present in fallback call"
+    assert result == '{"ok": true}'

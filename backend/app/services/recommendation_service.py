@@ -130,14 +130,16 @@ class RecommendationService:
             logger.warning("LLM recommendation generation failed, falling back: error=%s", exc)
             return self._fallback_recommendations(patient, articles, guidelines)
 
-        payload = self._extract_json_payload(text)
-        if payload:
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError as exc:
-                raise ValueError("Native LLM response parsing failed: invalid JSON payload") from exc
-        else:
-            parsed = {"recommendations": []}
+        payload = self._safe_parse_json(text)
+        if payload is None:
+            logger.warning(
+                "LLM recommendation parsing failed: model=%s backend=%s response_snippet=%r",
+                getattr(self.llm_service, "model", "unknown"),
+                getattr(self.llm_service, "backend", "unknown"),
+                text[:200],
+            )
+            return self._fallback_recommendations(patient, articles, guidelines)
+        parsed = payload
         recommendations = parsed.get("recommendations", [])
         candidate_treatments = [
             r.get("treatment_name", "Guideline-directed therapy")
@@ -191,14 +193,50 @@ class RecommendationService:
                 break
         return result[: self._max_recommendations]
 
-    def _extract_json_payload(self, text: str) -> str | None:
+    def _safe_parse_json(self, text: str) -> dict | None:
+        """Robustly extract and parse a JSON object from *text*.
+
+        Handles:
+        - Pure JSON responses
+        - Responses wrapped in ```json ... ``` or ``` ... ``` markdown fences
+        - Responses with leading/trailing prose surrounding the JSON object
+
+        Returns the parsed dict, or ``None`` if no valid JSON object can be found.
+        Does not raise on malformed JSON.
+        """
+        if not text:
+            return None
         stripped = text.strip()
-        if stripped.startswith("{") and stripped.endswith("}"):
-            return stripped
+
+        # Strip ```json ... ``` or ``` ... ``` markdown fences.
+        if stripped.startswith("```"):
+            end_fence = stripped.find("```", 3)
+            if end_fence != -1:
+                inner = stripped[3:end_fence].strip()
+                if inner.startswith("json"):
+                    inner = inner[4:].strip()
+                stripped = inner
+
+        # Try the whole (possibly de-fenced) text first.
+        try:
+            result = json.loads(stripped)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+        # Fall back: find the first '{' and last '}' and try that substring.
+        # This handles responses with leading/trailing prose in O(n) time.
         start = stripped.find("{")
         end = stripped.rfind("}")
         if start != -1 and end > start:
-            return stripped[start : end + 1]
+            try:
+                result = json.loads(stripped[start : end + 1])
+                if isinstance(result, dict):
+                    return result
+            except json.JSONDecodeError:
+                pass
+
         return None
 
     async def _estimate_risk_with_llm(
@@ -274,12 +312,14 @@ class RecommendationService:
                 "LLM risk estimation failed: treatment=%s error=%s", treatment_name, exc
             )
             return None
-        payload = self._extract_json_payload(text)
-        if not payload:
-            return None
-        try:
-            parsed = json.loads(payload)
-        except json.JSONDecodeError:
+        parsed = self._safe_parse_json(text)
+        if parsed is None:
+            logger.debug(
+                "LLM risk estimation returned unparseable JSON: treatment=%s model=%s response_snippet=%r",
+                treatment_name,
+                getattr(self.llm_service, "model", "unknown"),
+                text[:200],
+            )
             return None
 
         risk_score = parsed.get("risk_score")
