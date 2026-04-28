@@ -1,4 +1,5 @@
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -32,7 +33,8 @@ class RiskOverride:
     evidence_quality_score: float
 
 class RecommendationService:
-    _target_recommendation_count = 5
+    _min_recommendations: int = int(os.getenv("MIN_RECOMMENDATIONS", "3"))
+    _max_recommendations: int = int(os.getenv("MAX_RECOMMENDATIONS", "15"))
     _MAX_RISK_ARTICLES = 8
     _MAX_LLM_FACTOR_INPUT = 10
     _MAX_LLM_FACTOR_OUTPUT = 8
@@ -41,12 +43,23 @@ class RecommendationService:
         "State whether this treatment appears lower/equal/higher risk versus alternatives."
     )
 
-    def __init__(self, llm_backend: str = "ollama", llm_model: str = "mistral", llm_endpoint: str | None = None) -> None:
+    def __init__(
+        self,
+        llm_backend: str = "ollama",
+        llm_model: str = "mistral",
+        llm_endpoint: str | None = None,
+        min_recommendations: int | None = None,
+        max_recommendations: int | None = None,
+    ) -> None:
         self.risk_service = RiskAnalysisService()
         self.risk_article_filter = RiskArticleFilter()
         self.pmc_ae_parser = PMCAEParser()
         self.citation_service = CitationService()
         self.llm_service = LLMService(backend=llm_backend, model=llm_model, endpoint=llm_endpoint)
+        if min_recommendations is not None:
+            self._min_recommendations = min_recommendations
+        if max_recommendations is not None:
+            self._max_recommendations = max_recommendations
 
     async def generate(
         self,
@@ -101,7 +114,7 @@ class RecommendationService:
         recommendations = parsed.get("recommendations", [])
         candidate_treatments = [
             r.get("treatment_name", "Guideline-directed therapy")
-            for r in recommendations[: self._target_recommendation_count]
+            for r in recommendations[: self._max_recommendations]
             if isinstance(r, dict)
         ]
         comparative_base_scores = [
@@ -136,9 +149,9 @@ class RecommendationService:
                 continue
             result.append(item)
             seen_treatments.add(item.treatment.name)
-            if len(result) >= self._target_recommendation_count:
+            if len(result) >= self._max_recommendations:
                 break
-        return result[: self._target_recommendation_count]
+        return result[: self._max_recommendations]
 
     def _extract_json_payload(self, text: str) -> str | None:
         stripped = text.strip()
@@ -330,11 +343,11 @@ class RecommendationService:
             ]
 
         recommendations: list[Recommendation] = []
-        for name, mechanism, drug_class, indication in base_recommendations[: self._target_recommendation_count]:
+        for name, mechanism, drug_class, indication in base_recommendations[: self._max_recommendations]:
             recommendations.extend(
                 self._build_recommendations(patient, name, mechanism, drug_class, indication, articles)
             )
-        return recommendations[: self._target_recommendation_count]
+        return recommendations[: self._max_recommendations]
 
     async def _build_recommendations_with_llm_risk(
         self,

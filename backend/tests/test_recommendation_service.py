@@ -4,7 +4,7 @@ from app.models.ehr import Biomarker, CancerType, Genetics, OrganFunction, Patie
 from app.models.evidence import GuidelineReference, PubMedArticle
 from app.models.pmc import PMCArticle
 from app.services.recommendation_service import RecommendationService
-from app.services.risk_analysis_service import PMCAEParser, RiskAnalysisService, RiskArticleFilter
+from app.services.risk_analysis_service import LLMRiskAnalysisService, PMCAEParser, RiskAnalysisService, RiskArticleFilter
 
 
 def _patient() -> PatientEHR:
@@ -49,7 +49,8 @@ def test_recommendation_service_falls_back_without_native_llm():
     service = RecommendationService(llm_backend="onnx", llm_model="mock")
     result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
     assert result
-    assert len(result) == 5
+    assert len(result) >= service._min_recommendations
+    assert len(result) <= service._max_recommendations
     assert result[0].treatment.name == "Targeted Therapy"
     # Risk scores should vary across treatments due to evidence-informed per-treatment scoring
     scores = [r.risk_score for r in result]
@@ -74,7 +75,8 @@ def test_recommendation_service_uses_native_llm_json_payload():
     service.llm_service = StubLLM()
     result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
     assert result
-    assert len(result) == 5
+    assert len(result) >= service._min_recommendations
+    assert len(result) <= service._max_recommendations
     assert result[0].treatment.name == "Osimertinib"
     scores = [r.risk_score for r in result]
     assert len(set(scores)) > 1, "Distinct treatments should have distinct risk scores"
@@ -208,3 +210,176 @@ def test_pmc_ae_parser_extracts_grade34_discontinuation_and_sae():
     assert parsed["discontinuation_rate"] == 22.0
     assert parsed["sae_rate"] == 12.0
     assert parsed["grade3_4_events"]
+
+
+# ---------------------------------------------------------------------------
+# LLMRiskAnalysisService tests
+# ---------------------------------------------------------------------------
+
+
+class _StubLLMAvailable:
+    """Stub LLMService that returns a valid risk analysis JSON."""
+
+    is_available = True
+
+    async def generate(self, prompt: str, max_tokens: int = 800) -> str:
+        return (
+            '{"risk_score": 6.5, "confidence_interval": [5.5, 7.5], '
+            '"risk_factors": [{"factor": "EGFR mutation aligns well with osimertinib", "contribution": -0.5, "type": "risk-mitigating"}, '
+            '{"factor": "Stage IV disease elevates overall risk", "contribution": 1.5, "type": "risk-elevating"}], '
+            '"reasoning": "Patient has EGFR mutation which is well-matched to osimertinib; stage IV increases risk.", '
+            '"layer_breakdown": [{"layer": 1, "layer_name": "Patient", "factor": "Stage IV", "contribution": 1.5, "impact_type": "risk-elevating"}]}'
+        )
+
+
+class _StubLLMUnavailable:
+    """Stub LLMService that is unavailable."""
+
+    is_available = False
+
+    async def generate(self, prompt: str, max_tokens: int = 800) -> str:
+        raise RuntimeError("LLM unavailable")
+
+
+def test_llm_risk_analysis_service_returns_valid_score():
+    """LLMRiskAnalysisService produces valid 1.0–10.0 risk scores and CI."""
+    service = LLMRiskAnalysisService(llm_service=_StubLLMAvailable())
+    result = asyncio.run(
+        service.analyze_risk_factors(_patient(), "Osimertinib", drug_class="targeted")
+    )
+    assert 1.0 <= result["score"] <= 10.0
+    low, high = result["ci"]
+    assert 1.0 <= low <= high <= 10.0
+    assert isinstance(result["factors"], list)
+    assert isinstance(result["reasoning"], str)
+    assert isinstance(result["breakdown"], list)
+
+
+def test_llm_risk_analysis_service_includes_llm_attribution():
+    """LLM-derived risk factors include an attribution note."""
+    service = LLMRiskAnalysisService(llm_service=_StubLLMAvailable())
+    result = asyncio.run(
+        service.analyze_risk_factors(_patient(), "Osimertinib", drug_class="targeted")
+    )
+    assert any("LLM" in f or "synthesised" in f.lower() for f in result["factors"]), (
+        "Expected an LLM attribution note in risk factors"
+    )
+
+
+def test_llm_risk_analysis_service_falls_back_when_llm_unavailable():
+    """LLMRiskAnalysisService falls back to rule-based scoring when LLM is unavailable."""
+    service = LLMRiskAnalysisService(llm_service=_StubLLMUnavailable())
+    result = asyncio.run(
+        service.analyze_risk_factors(_patient(), "Osimertinib", drug_class="targeted")
+    )
+    assert 1.0 <= result["score"] <= 10.0
+    assert "Rule-based" in result["reasoning"]
+
+
+def test_llm_risk_analysis_service_falls_back_on_bad_json():
+    """LLMRiskAnalysisService falls back gracefully when LLM returns unparseable output."""
+
+    class _StubBadJSON:
+        is_available = True
+
+        async def generate(self, prompt: str, max_tokens: int = 800) -> str:
+            return "this is not json at all"
+
+    service = LLMRiskAnalysisService(llm_service=_StubBadJSON())
+    result = asyncio.run(
+        service.analyze_risk_factors(_patient(), "Osimertinib", drug_class="targeted")
+    )
+    assert 1.0 <= result["score"] <= 10.0
+    assert isinstance(result["factors"], list)
+
+
+def test_llm_risk_scores_differ_by_patient_treatment_combination():
+    """LLM risk analysis produces different scores for different patient-treatment combos."""
+    service = LLMRiskAnalysisService(llm_service=_StubLLMUnavailable())
+
+    patient_young = PatientEHR(
+        patient_id="young",
+        cancer_type=CancerType.nsclc,
+        stage=Stage.i,
+        biomarkers=[Biomarker(name="EGFR", value="positive")],
+        genetics=[Genetics(mutation="EGFR", status="mutated")],
+        age=45,
+        ecog=0,
+        comorbidities=[],
+        metastases=[],
+        organ_function=OrganFunction(renal="normal", hepatic="normal", cardiac="normal"),
+    )
+    patient_old = PatientEHR(
+        patient_id="old",
+        cancer_type=CancerType.nsclc,
+        stage=Stage.iv,
+        biomarkers=[],
+        genetics=[],
+        age=80,
+        ecog=3,
+        comorbidities=["autoimmune disease", "hypertension"],
+        metastases=["liver", "bone", "brain"],
+        organ_function=OrganFunction(renal="poor", hepatic="poor", cardiac="poor"),
+    )
+
+    result_young = asyncio.run(service.analyze_risk_factors(patient_young, "Osimertinib", "targeted"))
+    result_old = asyncio.run(service.analyze_risk_factors(patient_old, "Pembrolizumab", "immunotherapy"))
+
+    assert result_old["score"] > result_young["score"], (
+        "High-risk patient with poor function should score higher than low-risk young patient"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flexible recommendation count tests
+# ---------------------------------------------------------------------------
+
+
+def test_flexible_recommendation_count_respects_max():
+    """Recommendation service never exceeds max_recommendations."""
+    service = RecommendationService(llm_backend="onnx", llm_model="mock", max_recommendations=8)
+    result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
+    assert len(result) <= 8
+
+
+def test_flexible_recommendation_count_respects_min():
+    """Recommendation service returns at least min_recommendations when data is available."""
+    service = RecommendationService(llm_backend="onnx", llm_model="mock", min_recommendations=3)
+    result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
+    assert len(result) >= 3
+
+
+def test_recommendations_can_exceed_five():
+    """Recommendations are no longer hard-capped at 5."""
+    service = RecommendationService(
+        llm_backend="onnx", llm_model="mock", min_recommendations=3, max_recommendations=15
+    )
+    result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
+    # For an NSCLC patient with a guideline, fallback produces 6 candidates (1 guideline + 5 NSCLC).
+    # With max=15 we should return all of them (>5).
+    assert len(result) > 5, (
+        f"Expected >5 recommendations with max_recommendations=15, got {len(result)}"
+    )
+
+
+def test_llm_recommendations_exceed_five_with_high_max():
+    """LLM path returns more than 5 recommendations when LLM supplies enough candidates."""
+
+    class _StubLLMMany:
+        is_available = True
+
+        async def generate(self, prompt: str, max_tokens: int = 1000) -> str:
+            treatments = [
+                {"treatment_name": f"Drug_{i}", "mechanism": "mechanism", "drug_class": "targeted", "indication": "ind"}
+                for i in range(10)
+            ]
+            import json
+            return json.dumps({"recommendations": treatments})
+
+    service = RecommendationService(
+        llm_backend="onnx", llm_model="mock", min_recommendations=3, max_recommendations=15
+    )
+    service.llm_service = _StubLLMMany()
+    result = asyncio.run(service.generate(_patient(), [_article()], [_guideline()]))
+    assert len(result) > 5
+    assert len(result) <= 15
