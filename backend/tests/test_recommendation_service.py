@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from app.models.ehr import Biomarker, CancerType, Genetics, OrganFunction, PatientEHR, Stage
 from app.models.evidence import GuidelineReference, PubMedArticle
@@ -261,7 +262,7 @@ def test_llm_risk_analysis_service_includes_llm_attribution():
     result = asyncio.run(
         service.analyze_risk_factors(_patient(), "Osimertinib", drug_class="targeted")
     )
-    assert any("LLM" in f or "synthesised" in f.lower() for f in result["factors"]), (
+    assert any("LLM" in f or "synthesized" in f.lower() for f in result["factors"]), (
         "Expected an LLM attribution note in risk factors"
     )
 
@@ -373,7 +374,6 @@ def test_llm_recommendations_exceed_five_with_high_max():
                 {"treatment_name": f"Drug_{i}", "mechanism": "mechanism", "drug_class": "targeted", "indication": "ind"}
                 for i in range(10)
             ]
-            import json
             return json.dumps({"recommendations": treatments})
 
     service = RecommendationService(

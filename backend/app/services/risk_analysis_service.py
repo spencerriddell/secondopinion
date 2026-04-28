@@ -761,7 +761,7 @@ class LLMRiskAnalysisService:
                 ],
             },
             "instructions": (
-                "Synthesise patient-specific risk considering: patient demographics and comorbidities, "
+                "Synthesize patient-specific risk considering: patient demographics and comorbidities, "
                 "drug-class toxicity profile, evidence from the supplied literature, "
                 "and patient–treatment biomarker/organ-function interactions. "
                 "Output strict JSON only matching the schema."
@@ -821,14 +821,14 @@ class LLMRiskAnalysisService:
         if ranked_factors:
             ranked_factors = [
                 *ranked_factors,
-                f"Risk synthesised by LLM from patient profile and {len(articles)} evidence source(s).",
+                f"Risk synthesized by LLM from patient profile and {len(articles)} evidence source(s).",
             ]
 
         breakdown = parsed.get("layer_breakdown", [])
         if not isinstance(breakdown, list):
             breakdown = []
 
-        reasoning = parsed.get("reasoning") or "LLM-synthesised risk analysis"
+        reasoning = parsed.get("reasoning") or "LLM-synthesized risk analysis"
 
         return {
             "score": bounded,
