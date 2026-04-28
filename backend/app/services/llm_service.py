@@ -51,22 +51,46 @@ class LLMService:
         return await asyncio.to_thread(self._generate_ollama, prompt, options)
 
     def _generate_ollama(self, prompt: str, options: dict) -> str:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an oncology clinical decision support assistant. "
+                    "Respond with ONLY a valid JSON object. No explanation, no markdown, no code fences. Start your response with { and end with }."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
         try:
             client = ollama.Client(host=self.endpoint) if self.endpoint else ollama.Client()
             response = client.chat(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an oncology clinical decision support assistant. "
-                            "Respond with ONLY a valid JSON object. No explanation, no markdown, no code fences. Start your response with { and end with }."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 options=options,
+                format="json",
             )
+            logger.debug("Ollama JSON mode enabled: model=%s", self.model)
+        except TypeError:
+            # Older ollama client versions may not support the format parameter; retry without it.
+            logger.debug(
+                "Ollama JSON mode not supported by client version, retrying without: model=%s",
+                self.model,
+            )
+            try:
+                client = ollama.Client(host=self.endpoint) if self.endpoint else ollama.Client()
+                response = client.chat(
+                    model=self.model,
+                    messages=messages,
+                    options=options,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Ollama chat failed: model=%s endpoint=%s error=%s",
+                    self.model,
+                    self.endpoint or "(default)",
+                    exc,
+                )
+                raise RuntimeError(f"Ollama generation failed for model '{self.model}'") from exc
         except Exception as exc:
             logger.error(
                 "Ollama chat failed: model=%s endpoint=%s error=%s",
